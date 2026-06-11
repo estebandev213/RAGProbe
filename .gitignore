@@ -3,7 +3,11 @@
 CLAUDE.md
 
 # --- Secrets & env ---
+# Ignore all .env variants (.env, .env.local, .env.production, ...) except the
+# checked-in template. Real credentials must never be committed.
 .env
+.env.*
+!.env.example
 
 # --- Python ---
 __pycache__/

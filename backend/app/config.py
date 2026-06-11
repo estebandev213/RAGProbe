@@ -1,0 +1,71 @@
+"""Application configuration via pydantic-settings.
+
+Settings are read from environment variables first, then from a ``.env`` file
+at the repository root (so the app works whether ``uvicorn`` is launched from
+the repo root or from ``backend/``). A missing required variable — notably
+``GROQ_API_KEY`` — fails fast with a clear, actionable message at startup.
+"""
+
+from __future__ import annotations
+
+from functools import lru_cache
+
+from pydantic import Field, ValidationError
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Checked in order; values found later win, real environment variables always win.
+DEFAULT_ENV_FILES: tuple[str, ...] = (".env", "../.env")
+
+
+class ConfigError(RuntimeError):
+    """Raised when required configuration is missing or invalid."""
+
+
+class Settings(BaseSettings):
+    """Typed application settings loaded from the environment / ``.env``."""
+
+    model_config = SettingsConfigDict(
+        env_file=DEFAULT_ENV_FILES,
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore",
+    )
+
+    # Required and non-empty: an empty value (e.g. a freshly copied .env.example)
+    # must fail fast rather than boot with an unusable credential.
+    groq_api_key: str = Field(min_length=1)
+    demo_mode: bool = True
+    database_path: str = "./data/ragprobe.db"
+    groq_generation_model: str = "llama-3.3-70b-versatile"
+    groq_fast_model: str = "llama-3.1-8b-instant"
+
+    # Application version surfaced by /api/health. Not read from the environment
+    # in practice, but overridable for tests/deploys.
+    version: str = "0.1.0"
+
+
+def _format_validation_error(exc: ValidationError) -> str:
+    """Turn a pydantic ValidationError into a clear, actionable message."""
+    fields = sorted({str(err["loc"][0]).upper() for err in exc.errors() if err["loc"]})
+    if fields:
+        joined = ", ".join(fields)
+        return (
+            f"Missing or invalid required configuration: {joined}. "
+            "Set it in your environment or in a .env file at the repo root "
+            "(copy .env.example to .env and fill in the values)."
+        )
+    return f"Invalid configuration: {exc}"
+
+
+def _create_settings(env_file: tuple[str, ...] | None = DEFAULT_ENV_FILES) -> Settings:
+    """Build Settings, translating validation failures into ConfigError."""
+    try:
+        return Settings(_env_file=env_file)  # type: ignore[call-arg]
+    except ValidationError as exc:
+        raise ConfigError(_format_validation_error(exc)) from exc
+
+
+@lru_cache(maxsize=1)
+def get_settings() -> Settings:
+    """Return the process-wide settings singleton (cached)."""
+    return _create_settings()

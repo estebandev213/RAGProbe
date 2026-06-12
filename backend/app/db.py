@@ -18,6 +18,8 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
+import sqlite_vec
+
 from app.config import get_settings
 
 # Ordered schema migrations. The list index (1-based) is the schema version
@@ -32,6 +34,26 @@ _MIGRATIONS: tuple[str, ...] = (
         text       TEXT NOT NULL,
         char_count INTEGER NOT NULL,
         created_at TEXT NOT NULL
+    );
+    """,
+    # Chunks are per (document, chunk_size); offsets index into documents.text.
+    # vec_chunks is a sqlite-vec virtual table holding one 384-dim embedding per
+    # chunk, keyed by chunk id so vectors join straight back to chunk rows.
+    """
+    CREATE TABLE chunks (
+        id          TEXT PRIMARY KEY,
+        document_id TEXT NOT NULL REFERENCES documents(id),
+        chunk_size  INTEGER NOT NULL,
+        idx         INTEGER NOT NULL,
+        text        TEXT NOT NULL,
+        start_char  INTEGER NOT NULL,
+        end_char    INTEGER NOT NULL
+    );
+    CREATE INDEX idx_chunks_doc_size ON chunks(document_id, chunk_size);
+
+    CREATE VIRTUAL TABLE vec_chunks USING vec0(
+        chunk_id  TEXT PRIMARY KEY,
+        embedding float[384]
     );
     """,
 )
@@ -50,19 +72,32 @@ def connect(database_path: str | None = None) -> sqlite3.Connection:
     conn = sqlite3.connect(path, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
+    # Load sqlite-vec on every connection so the vec_chunks virtual table is
+    # available for both migrations and queries.
+    conn.enable_load_extension(True)
+    sqlite_vec.load(conn)
+    conn.enable_load_extension(False)
     return conn
 
 
 def run_migrations(conn: sqlite3.Connection) -> None:
-    """Apply any migrations newer than the connection's schema version."""
+    """Apply any migrations newer than the connection's schema version.
+
+    Each migration runs atomically: its statements and the ``user_version``
+    bump are wrapped in one transaction, so a mid-script failure rolls back
+    completely and the migration can simply be retried on the next startup
+    (instead of wedging the database with half-created tables).
+    """
     current = int(conn.execute("PRAGMA user_version").fetchone()[0])
     for version, migration in enumerate(_MIGRATIONS, start=1):
         if version > current:
-            conn.executescript(migration)
-            # user_version does not accept bound parameters; the value is a
-            # trusted loop index, not user input.
-            conn.execute(f"PRAGMA user_version = {version}")
-    conn.commit()
+            try:
+                # user_version does not accept bound parameters; the value is
+                # a trusted loop index, not user input.
+                conn.executescript(f"BEGIN;{migration};PRAGMA user_version = {version};COMMIT;")
+            except sqlite3.Error:
+                conn.rollback()
+                raise
 
 
 def init_db(database_path: str | None = None) -> None:

@@ -16,9 +16,10 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.config import get_settings
+from app.db import init_db
 from app.logging_config import configure_logging
 from app.models import ErrorResponse
-from app.routes import health
+from app.routes import documents, health
 
 logger = logging.getLogger("ragprobe")
 
@@ -68,6 +69,7 @@ def create_app() -> FastAPI:
     """Build and configure the FastAPI application."""
     configure_logging()
     settings = get_settings()  # fail-fast: raises ConfigError if GROQ_API_KEY is unset
+    init_db()  # create the SQLite file and bring its schema up to date
 
     app = FastAPI(title="RAGProbe", version=settings.version)
 
@@ -81,6 +83,7 @@ def create_app() -> FastAPI:
 
     _register_exception_handlers(app)
     app.include_router(health.router, prefix="/api")
+    app.include_router(documents.router, prefix="/api")
 
     logger.info(
         "app_initialized",

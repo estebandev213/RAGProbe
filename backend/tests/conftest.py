@@ -9,3 +9,6 @@ without a real credential.
 import os
 
 os.environ.setdefault("GROQ_API_KEY", "test-dummy-key")
+# Keep tests off the real on-disk database by default; tests that need
+# persistence (e.g. document upload) override DATABASE_PATH with a tmp file.
+os.environ.setdefault("DATABASE_PATH", ":memory:")

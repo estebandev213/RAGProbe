@@ -56,6 +56,33 @@ _MIGRATIONS: tuple[str, ...] = (
         embedding float[384]
     );
     """,
+    # A run owns a generated exam (questions) and, in later commits, its config
+    # matrix, answers, and grades. The runs table is created here — ahead of the
+    # runner commit that fills its lifecycle — so questions.run_id references a
+    # real parent and the foreign key is enforceable (a dangling FK errors on
+    # insert under PRAGMA foreign_keys = ON). gold_spans is a JSON array of
+    # {doc_id, start_char, end_char}; empty for unanswerable questions.
+    """
+    CREATE TABLE runs (
+        id         TEXT PRIMARY KEY,
+        status     TEXT NOT NULL,
+        doc_ids    TEXT NOT NULL,
+        settings   TEXT NOT NULL,
+        error      TEXT,
+        created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE questions (
+        id            TEXT PRIMARY KEY,
+        run_id        TEXT NOT NULL REFERENCES runs(id),
+        qtype         TEXT NOT NULL,
+        question      TEXT NOT NULL,
+        gold_answer   TEXT NOT NULL,
+        gold_spans    TEXT NOT NULL,
+        source_doc_id TEXT
+    );
+    CREATE INDEX idx_questions_run ON questions(run_id);
+    """,
 )
 
 

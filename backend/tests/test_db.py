@@ -10,7 +10,7 @@ import sqlite3
 
 import pytest
 import sqlite_vec
-from app.db import run_migrations
+from app.db import _MIGRATIONS, run_migrations
 
 
 def _table_names(conn: sqlite3.Connection) -> set[str]:
@@ -38,5 +38,6 @@ def test_failed_migration_rolls_back_and_is_retryable() -> None:
     conn.enable_load_extension(False)
     run_migrations(conn)
 
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 2
-    assert {"documents", "chunks", "vec_chunks"} <= _table_names(conn)
+    # All migrations apply on retry; user_version tracks the migration count.
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == len(_MIGRATIONS)
+    assert {"documents", "chunks", "vec_chunks", "runs", "questions"} <= _table_names(conn)

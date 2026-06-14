@@ -7,6 +7,10 @@
 
 import type {
   DocumentSummary,
+  FailuresResponse,
+  Grade,
+  GradeOverride,
+  ReportResponse,
   RunCreated,
   RunEvent,
   RunStatusResponse,
@@ -98,6 +102,33 @@ export async function createRun(
 /** Fetch a run's current status snapshot. */
 export async function getRun(runId: string): Promise<RunStatusResponse> {
   return request<RunStatusResponse>(`/runs/${runId}`);
+}
+
+/** Fetch a run's aggregated report: leaderboard, breakdown, recommendation. */
+export async function getReport(runId: string): Promise<ReportResponse> {
+  return request<ReportResponse>(`/runs/${runId}/report`);
+}
+
+/** Fetch the failure drill-down rows for a run, ranked worst first. */
+export async function getFailures(runId: string): Promise<FailuresResponse> {
+  return request<FailuresResponse>(`/runs/${runId}/failures`);
+}
+
+/**
+ * Manually correct a grade's correctness and/or faithfulness (§6.5).
+ *
+ * The backend recomputes the composite on read, so callers should refetch the
+ * report afterwards to re-aggregate the leaderboard.
+ */
+export async function overrideGrade(
+  gradeId: string,
+  patch: GradeOverride,
+): Promise<Grade> {
+  return request<Grade>(`/grades/${gradeId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
 }
 
 export interface RunStreamHandlers {

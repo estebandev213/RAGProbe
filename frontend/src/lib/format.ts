@@ -32,6 +32,55 @@ export function formatClock(date: Date): string {
   });
 }
 
+/** A 0–1 score as a two-decimal string; em dash for a missing metric. */
+export function formatScore(value: number | null): string {
+  return value === null ? "—" : value.toFixed(2);
+}
+
+/** Latency in milliseconds rendered as seconds, one decimal: "1.4s". */
+export function formatLatency(ms: number): string {
+  return `${(ms / 1000).toFixed(1)}s`;
+}
+
+/** Wall-clock date and time, e.g. "May 10, 2025, 10:47 AM". */
+export function formatDateTime(date: Date): string {
+  return date.toLocaleString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+/** Coarse "x ago" relative time for the report header. */
+export function formatRelative(from: Date, now: Date = new Date()): string {
+  const seconds = Math.max(
+    0,
+    Math.round((now.getTime() - from.getTime()) / 1000),
+  );
+  if (seconds < 60) return "just now";
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.round(hours / 24)}d ago`;
+}
+
+/** Short, accurate description of a retrieval strategy for config sublabels. */
+export function strategyDetail(strategy: string): string {
+  switch (strategy) {
+    case "hybrid":
+      return "RRF fusion (k=60)";
+    case "bm25":
+      return "BM25 keyword";
+    case "vector":
+      return "vector / cosine";
+    default:
+      return strategy;
+  }
+}
+
 export interface ParsedConfig {
   chunkSize: number;
   strategy: string;

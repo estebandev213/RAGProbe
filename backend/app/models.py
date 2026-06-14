@@ -295,3 +295,116 @@ class GradeOverride(BaseModel):
         if value is not None and value not in VALID_SCORES:
             raise ValueError(f"score must be one of {VALID_SCORES}")
         return value
+
+
+# ---------------------------------------------------------------------------
+# Report aggregation (§7, §8): the leaderboard + per-question-type breakdown the
+# report card ranks configs by, and the failure drill-down rows it explores.
+# ---------------------------------------------------------------------------
+
+
+class ConfigScore(BaseModel):
+    """One config's aggregated scores — a leaderboard row.
+
+    ``retrieval_hit`` is the mean over answerable questions only (unanswerable
+    are excluded from that metric), and is ``None`` when the config answered no
+    answerable question.
+    """
+
+    config_id: str
+    label: str
+    chunk_size: int
+    strategy: str
+    composite: float
+    correctness: float
+    faithfulness: float
+    retrieval_hit: float | None
+    mean_latency_ms: float
+    n_answers: int
+
+
+class QTypeScore(BaseModel):
+    """Mean composite for one question type within a config (breakdown bar)."""
+
+    qtype: QType
+    composite: float
+    n: int
+
+
+class ConfigBreakdown(BaseModel):
+    """Per-question-type scores for one config — feeds the grouped bar chart."""
+
+    config_id: str
+    label: str
+    by_qtype: list[QTypeScore]
+
+
+class ReportResponse(BaseModel):
+    """Response for ``GET /api/runs/{id}/report`` (§7).
+
+    ``leaderboard`` is ranked by composite (best first); ``winner_label`` and
+    ``recommendation`` summarize the top config, or are empty/``None`` when the
+    run has no grades yet.
+    """
+
+    run_id: str
+    leaderboard: list[ConfigScore]
+    breakdown: list[ConfigBreakdown]
+    winner_label: str | None
+    recommendation: str
+
+
+class GoldSpanHit(BaseModel):
+    """A gold span paired with whether retrieval covered it (≥ 50% overlap)."""
+
+    span: GoldSpan
+    hit: bool
+
+
+class RetrievedChunkView(BaseModel):
+    """A retrieved chunk as shown in the failure explorer (offsets drive badges)."""
+
+    chunk_id: str
+    document_id: str
+    start_char: int
+    end_char: int
+    text: str
+
+
+class FailureRow(BaseModel):
+    """One graded answer with everything the explorer needs to diagnose it (§8).
+
+    Carries the three metric scores, the composite, and per-metric failure flags
+    so the UI can badge and filter without recomputation — the backend hides
+    nothing, it ranks (worst first) and labels.
+    """
+
+    answer_id: str
+    grade_id: str
+    config_id: str
+    config_label: str
+    question_id: str
+    qtype: QType
+    question: str
+    gold_answer: str
+    answer_text: str
+    gold_span_hits: list[GoldSpanHit]
+    retrieved_chunks: list[RetrievedChunkView]
+    correctness: float
+    faithfulness: float
+    retrieval_hit: float | None
+    composite: float
+    is_failure: bool
+    correctness_failed: bool
+    faithfulness_failed: bool
+    retrieval_failed: bool
+    judge_rationale: str
+    judge_confidence: JudgeConfidence
+    overridden: bool
+
+
+class FailuresResponse(BaseModel):
+    """Response for ``GET /api/runs/{id}/failures`` — rows ranked worst first."""
+
+    run_id: str
+    failures: list[FailureRow]

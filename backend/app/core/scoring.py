@@ -1,7 +1,7 @@
-"""Span-overlap retrieval scoring and the composite score (§6.5).
+"""Span-overlap retrieval scoring, the composite score, and report aggregation.
 
-This module is deliberately pure: no LLM, no I/O, just the math the judge leans
-on. Two things live here:
+This module is deliberately pure: no LLM, no I/O, just the math the judge and the
+report lean on (§6.5). Three things live here:
 
 * **Retrieval hit** — a gold span counts as *hit* when some retrieved chunk
   overlaps at least :data:`MIN_OVERLAP` of it. Because the test is "does the
@@ -13,14 +13,26 @@ on. Two things live here:
   questions have no retrieval metric (nothing to retrieve), so their composite
   renormalizes over the two metrics that do apply rather than penalizing an
   abstention for a dimension that cannot exist.
+* **Aggregation** — folding per-answer grades into the leaderboard and the
+  per-question-type breakdown, plus picking the winning config and its one-line
+  recommendation. Pure functions over plain rows so the report route just feeds
+  them DB results.
 """
 
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import dataclass
 
 from app.core.retrieval import ScoredChunk
-from app.models import GoldSpan, QType, Question
+from app.models import (
+    ConfigBreakdown,
+    ConfigScore,
+    GoldSpan,
+    QType,
+    QTypeScore,
+    Question,
+)
 
 # Fraction of a gold span a chunk must cover to count as a hit (§6.5).
 MIN_OVERLAP = 0.5
@@ -86,3 +98,127 @@ def composite_score(correctness: float, faithfulness: float, retrieval_hit: floa
             W_CORRECTNESS + W_FAITHFULNESS
         )
     return W_CORRECTNESS * correctness + W_FAITHFULNESS * faithfulness + W_RETRIEVAL * retrieval_hit
+
+
+# ---------------------------------------------------------------------------
+# Report aggregation (§7, §8)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class GradedAnswer:
+    """One answer's grade joined with the config and question it belongs to.
+
+    The neutral input to aggregation — the report route maps a DB join onto these
+    so this module never touches SQL.
+    """
+
+    config_id: str
+    config_label: str
+    chunk_size: int
+    strategy: str
+    qtype: QType
+    latency_ms: int
+    correctness: float
+    faithfulness: float
+    retrieval_hit: float | None
+
+
+def _mean(values: Sequence[float]) -> float:
+    """Arithmetic mean, or 0.0 for an empty sequence."""
+    return sum(values) / len(values) if values else 0.0
+
+
+def _mean_optional(values: Sequence[float | None]) -> float | None:
+    """Mean of the non-``None`` values, or ``None`` if there are none.
+
+    Used for retrieval_hit, which is ``None`` on unanswerable questions: those
+    are excluded from the average rather than counted as zero.
+    """
+    present = [value for value in values if value is not None]
+    return _mean(present) if present else None
+
+
+def build_leaderboard(rows: Sequence[GradedAnswer]) -> list[ConfigScore]:
+    """Aggregate graded answers into per-config scores, ranked by composite (§7).
+
+    Each answer's composite is computed first, then averaged per config. Configs
+    are ordered by composite descending, ties broken by label for determinism.
+    """
+    by_config: dict[str, list[GradedAnswer]] = {}
+    for row in rows:
+        by_config.setdefault(row.config_id, []).append(row)
+
+    scores = [
+        ConfigScore(
+            config_id=config_id,
+            label=group[0].config_label,
+            chunk_size=group[0].chunk_size,
+            strategy=group[0].strategy,
+            composite=_mean(
+                [composite_score(a.correctness, a.faithfulness, a.retrieval_hit) for a in group]
+            ),
+            correctness=_mean([a.correctness for a in group]),
+            faithfulness=_mean([a.faithfulness for a in group]),
+            retrieval_hit=_mean_optional([a.retrieval_hit for a in group]),
+            mean_latency_ms=_mean([float(a.latency_ms) for a in group]),
+            n_answers=len(group),
+        )
+        for config_id, group in by_config.items()
+    ]
+    scores.sort(key=lambda score: (-score.composite, score.label))
+    return scores
+
+
+def build_breakdown(rows: Sequence[GradedAnswer], order: Sequence[str]) -> list[ConfigBreakdown]:
+    """Mean composite per (config, question type), for the grouped bar chart (§8).
+
+    Configs follow ``order`` (the leaderboard ranking); within each, question
+    types follow the taxonomy's declaration order.
+    """
+    by_config: dict[str, list[GradedAnswer]] = {}
+    for row in rows:
+        by_config.setdefault(row.config_id, []).append(row)
+
+    breakdowns: list[ConfigBreakdown] = []
+    for config_id in order:
+        group = by_config.get(config_id)
+        if not group:
+            continue
+        per_type = {qtype: [a for a in group if a.qtype is qtype] for qtype in QType}
+        breakdowns.append(
+            ConfigBreakdown(
+                config_id=config_id,
+                label=group[0].config_label,
+                by_qtype=[
+                    QTypeScore(
+                        qtype=qtype,
+                        composite=_mean(
+                            [
+                                composite_score(a.correctness, a.faithfulness, a.retrieval_hit)
+                                for a in answers
+                            ]
+                        ),
+                        n=len(answers),
+                    )
+                    for qtype, answers in per_type.items()
+                    if answers
+                ],
+            )
+        )
+    return breakdowns
+
+
+def recommend(leaderboard: Sequence[ConfigScore]) -> tuple[str | None, str]:
+    """The winning config's label and a one-line recommendation (§8).
+
+    Returns ``(None, "...")`` when there is nothing graded yet.
+    """
+    if not leaderboard:
+        return None, "No graded answers yet."
+    winner = leaderboard[0]
+    latency_s = winner.mean_latency_ms / 1000.0
+    return (
+        winner.label,
+        f"Use {winner.label} — best composite {winner.composite:.2f}, {latency_s:.1f}s avg.",
+    )

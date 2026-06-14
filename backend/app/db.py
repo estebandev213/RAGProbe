@@ -83,6 +83,35 @@ _MIGRATIONS: tuple[str, ...] = (
     );
     CREATE INDEX idx_questions_run ON questions(run_id);
     """,
+    # The run orchestrator (§6.7) materializes a config matrix (chunk_size x
+    # strategy) and, for every config x question, records the generated answer
+    # with the chunks it retrieved and its latency/token cost. Grades land on a
+    # separate table in the judging commit; retrieved_chunk_ids is a JSON array.
+    """
+    CREATE TABLE configs (
+        id         TEXT PRIMARY KEY,
+        run_id     TEXT NOT NULL REFERENCES runs(id),
+        chunk_size INTEGER NOT NULL,
+        strategy   TEXT NOT NULL,
+        top_k      INTEGER NOT NULL,
+        label      TEXT NOT NULL
+    );
+    CREATE INDEX idx_configs_run ON configs(run_id);
+
+    CREATE TABLE answers (
+        id                  TEXT PRIMARY KEY,
+        run_id              TEXT NOT NULL REFERENCES runs(id),
+        config_id           TEXT NOT NULL REFERENCES configs(id),
+        question_id         TEXT NOT NULL REFERENCES questions(id),
+        answer_text         TEXT NOT NULL,
+        retrieved_chunk_ids TEXT NOT NULL,
+        latency_ms          INTEGER NOT NULL,
+        prompt_tokens       INTEGER NOT NULL,
+        completion_tokens   INTEGER NOT NULL
+    );
+    CREATE INDEX idx_answers_run ON answers(run_id);
+    CREATE INDEX idx_answers_config ON answers(config_id);
+    """,
 )
 
 

@@ -1,0 +1,338 @@
+"""Tests for the run orchestrator, event bus, and run routes (§6.7, commit #8).
+
+Groq is mocked with ``respx`` and a deterministic fake embedder stands in for
+fastembed, so the full ``generate → index → answer`` pipeline runs offline and
+fast. The end-to-end test drives :func:`execute_run` against the bundled fixture
+and asserts the persisted matrix, the answer rows, and the emitted SSE events.
+"""
+
+import hashlib
+import json
+from collections.abc import Iterator, Sequence
+from pathlib import Path
+
+import httpx
+import pytest
+import respx
+from app.config import get_settings
+from app.core.exam import DEMO_EXAM_SIZE, taxonomy_counts
+from app.core.indexing import EMBED_DIM
+from app.core.runner import (
+    TOP_K,
+    answer_question,
+    build_config_matrix,
+    build_context,
+    execute_run,
+    strategies_for,
+)
+from app.db import connect, init_db
+from app.events import EventBus
+from app.main import create_app
+from app.models import (
+    ConfigSummary,
+    QType,
+    Question,
+    RunEvent,
+    RunEventType,
+    RunSettings,
+    RunStatus,
+)
+from fastapi.testclient import TestClient
+
+from tests.test_exam_parsing import GEN_MODEL, URL, _client, _completion, _make_questions
+
+FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "sample_docs" / "meridian-overview.md"
+
+
+def _fake_embedder(texts: Sequence[str]) -> list[list[float]]:
+    """Map each text to a deterministic, distinct 384-dim vector (no model load)."""
+    vectors: list[list[float]] = []
+    for text in texts:
+        digest = hashlib.sha256(text.encode("utf-8")).digest()
+        vectors.append([digest[i % len(digest)] / 255.0 for i in range(EMBED_DIM)])
+    return vectors
+
+
+_DEFAULT_ANSWER = "Meridian stores data as collections of JSON documents."
+
+
+def _answer_response(text: str = _DEFAULT_ANSWER) -> httpx.Response:
+    """A plain (non-JSON-mode) chat completion standing in for an answer."""
+    return httpx.Response(
+        200,
+        json={
+            "model": GEN_MODEL,
+            "choices": [{"message": {"content": text}}],
+            "usage": {"prompt_tokens": 12, "completion_tokens": 7, "total_tokens": 19},
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
+# Config matrix
+# ---------------------------------------------------------------------------
+
+
+def test_config_matrix_full_has_six_configs() -> None:
+    configs = build_config_matrix("run1", demo_mode=False)
+    assert len(configs) == 6
+    assert all(c.top_k == TOP_K for c in configs)
+    assert {c.label for c in configs} >= {"400/vector", "800/hybrid", "400/bm25"}
+
+
+def test_config_matrix_demo_has_four_configs() -> None:
+    configs = build_config_matrix("run1", demo_mode=True)
+    assert len(configs) == 4
+    assert all(c.strategy in strategies_for(True) for c in configs)
+    assert "bm25" not in {c.strategy for c in configs}
+
+
+# ---------------------------------------------------------------------------
+# Event bus
+# ---------------------------------------------------------------------------
+
+
+async def test_event_bus_fans_out_to_all_subscribers() -> None:
+    bus = EventBus()
+    q1 = bus.subscribe("run1")
+    q2 = bus.subscribe("run1")
+
+    bus.publish("run1", RunEvent(type=RunEventType.PHASE, phase=RunStatus.INDEXING))
+    first = await q1.get()
+    second = await q2.get()
+    assert first is not None and first.phase is RunStatus.INDEXING
+    assert second is not None and second.phase is RunStatus.INDEXING
+
+    bus.close("run1")
+    assert await q1.get() is None  # end-of-stream sentinel
+    assert await q2.get() is None
+
+
+async def test_event_bus_unsubscribe_stops_delivery() -> None:
+    bus = EventBus()
+    queue = bus.subscribe("run1")
+    bus.unsubscribe("run1", queue)
+
+    bus.publish("run1", RunEvent(type=RunEventType.RUN_DONE))  # reaches nobody
+    assert queue.empty()
+
+
+# ---------------------------------------------------------------------------
+# Context + answer generation
+# ---------------------------------------------------------------------------
+
+
+def _chunk(chunk_id: str, text: str):  # type: ignore[no-untyped-def]
+    from app.core.retrieval import ScoredChunk
+
+    return ScoredChunk(
+        chunk_id=chunk_id,
+        document_id="doc1",
+        chunk_size=400,
+        idx=0,
+        text=text,
+        start_char=0,
+        end_char=len(text),
+        score=1.0,
+    )
+
+
+class _StubRetriever:
+    """A retriever that returns a fixed chunk list (Retriever-compatible)."""
+
+    def __init__(self, chunks: Sequence[object]) -> None:
+        self._chunks = list(chunks)
+
+    def retrieve(self, query: str, chunk_size: int, top_k: int):  # type: ignore[no-untyped-def]
+        return self._chunks[:top_k]
+
+
+def test_build_context_labels_and_includes_chunk_text() -> None:
+    context = build_context([_chunk("c1", "alpha text"), _chunk("c2", "beta text")])
+    assert "[chunk 1]" in context and "[chunk 2]" in context
+    assert "alpha text" in context and "beta text" in context
+
+
+def _question() -> Question:
+    return Question(
+        id="q1",
+        run_id="run1",
+        qtype=QType.FACTUAL,
+        question="What does Meridian store?",
+        gold_answer="JSON documents",
+        gold_spans=[],
+        source_doc_id="doc1",
+    )
+
+
+def _config() -> ConfigSummary:
+    return ConfigSummary(
+        id="cfg1", run_id="run1", chunk_size=400, strategy="vector", top_k=TOP_K, label="400/vector"
+    )
+
+
+@respx.mock
+async def test_answer_question_records_retrieval_and_cost() -> None:
+    respx.post(URL).mock(return_value=_answer_response("JSON documents."))
+    retriever = _StubRetriever([_chunk("c1", "Meridian stores JSON documents."), _chunk("c2", "x")])
+
+    async with _client() as client:
+        result = await answer_question(client, retriever, _question(), _config())
+
+    assert result.answer_text == "JSON documents."
+    assert result.retrieved_chunk_ids == ["c1", "c2"]
+    assert result.prompt_tokens == 12
+    assert result.completion_tokens == 7
+    assert result.latency_ms >= 0
+
+
+@respx.mock
+async def test_answer_question_preserves_abstention() -> None:
+    respx.post(URL).mock(return_value=_answer_response("NOT_IN_DOCUMENTS"))
+    retriever = _StubRetriever([_chunk("c1", "unrelated context")])
+
+    async with _client() as client:
+        result = await answer_question(client, retriever, _question(), _config())
+
+    assert result.answer_text == "NOT_IN_DOCUMENTS"
+
+
+# ---------------------------------------------------------------------------
+# End-to-end run
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def run_db(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[str]:
+    """A file-backed database the orchestrator's own connection can reach."""
+    db_path = str(tmp_path / "run.db")
+    monkeypatch.setenv("GROQ_API_KEY", "test-key")
+    monkeypatch.setenv("DATABASE_PATH", db_path)
+    get_settings.cache_clear()
+    init_db(db_path)
+    yield db_path
+    get_settings.cache_clear()
+
+
+def _seed_run(db_path: str) -> None:
+    conn = connect(db_path)
+    try:
+        conn.execute(
+            "INSERT INTO documents (id, name, mime, text, char_count, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            ("doc1", "meridian-overview.md", "text/markdown", FIXTURE.read_text(), 1, "2026-06-13"),
+        )
+        conn.execute(
+            "INSERT INTO runs (id, status, doc_ids, settings, created_at) VALUES (?, ?, ?, ?, ?)",
+            ("run1", RunStatus.PENDING.value, json.dumps(["doc1"]), "{}", "2026-06-13T00:00:00Z"),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _groq_handler(request: httpx.Request) -> httpx.Response:
+    """Exam generation uses JSON mode; everything else is an answer call."""
+    body = json.loads(request.content)
+    if "response_format" in body:
+        return _completion({"questions": _make_questions(taxonomy_counts(DEMO_EXAM_SIZE))})
+    return _answer_response()
+
+
+@respx.mock
+async def test_execute_run_completes_and_emits_events(run_db: str) -> None:
+    _seed_run(run_db)
+    respx.post(URL).mock(side_effect=_groq_handler)
+
+    # Subscribe before the run so progress events are captured live.
+    from app.events import bus
+
+    queue = bus.subscribe("run1")
+    settings = RunSettings(demo_mode=True, n_questions=DEMO_EXAM_SIZE, top_k=TOP_K)
+
+    async with _client() as client:
+        await execute_run("run1", ["doc1"], settings, embed=_fake_embedder, client=client)
+
+    events: list[RunEvent] = []
+    while not queue.empty():
+        event = queue.get_nowait()
+        if event is None:
+            break
+        events.append(event)
+    bus.unsubscribe("run1", queue)
+
+    conn = connect(run_db)
+    try:
+        status = conn.execute("SELECT status FROM runs WHERE id = 'run1'").fetchone()[0]
+        n_configs = conn.execute("SELECT COUNT(*) FROM configs").fetchone()[0]
+        n_answers = conn.execute("SELECT COUNT(*) FROM answers").fetchone()[0]
+        n_questions = conn.execute("SELECT COUNT(*) FROM questions").fetchone()[0]
+    finally:
+        conn.close()
+
+    assert status == RunStatus.DONE.value
+    assert n_configs == 4
+    assert n_questions == DEMO_EXAM_SIZE
+    assert n_answers == 4 * DEMO_EXAM_SIZE  # every config x question answered
+
+    types = {event.type for event in events}
+    assert RunEventType.PHASE in types
+    assert RunEventType.PROGRESS in types
+    assert RunEventType.RUN_DONE in types
+    # Progress reaches the full question count on at least one config.
+    assert any(e.type is RunEventType.PROGRESS and e.done == DEMO_EXAM_SIZE for e in events)
+
+
+# ---------------------------------------------------------------------------
+# Routes
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def api(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[tuple[TestClient, str]]:
+    db_path = str(tmp_path / "api.db")
+    monkeypatch.setenv("GROQ_API_KEY", "test-key")
+    monkeypatch.setenv("DATABASE_PATH", db_path)
+    get_settings.cache_clear()
+    client = TestClient(create_app())
+    yield client, db_path
+    get_settings.cache_clear()
+
+
+def test_create_run_rejects_empty_doc_ids(api: tuple[TestClient, str]) -> None:
+    client, _ = api
+    assert client.post("/api/runs", json={"doc_ids": []}).status_code == 422
+
+
+def test_create_run_rejects_unknown_document(api: tuple[TestClient, str]) -> None:
+    client, _ = api
+    resp = client.post("/api/runs", json={"doc_ids": ["nope"]})
+    assert resp.status_code == 404
+
+
+def test_get_run_unknown_returns_404(api: tuple[TestClient, str]) -> None:
+    client, _ = api
+    assert client.get("/api/runs/missing").status_code == 404
+
+
+def test_events_endpoint_replays_terminal_status(api: tuple[TestClient, str]) -> None:
+    client, db_path = api
+    conn = connect(db_path)
+    try:
+        conn.execute(
+            "INSERT INTO runs (id, status, doc_ids, settings, created_at) VALUES (?, ?, ?, ?, ?)",
+            ("done1", RunStatus.DONE.value, "[]", "{}", "2026-06-13T00:00:00Z"),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    resp = client.get("/api/runs/done1/events")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/event-stream")
+    assert "run_done" in resp.text
+
+
+def test_events_endpoint_unknown_run_returns_404(api: tuple[TestClient, str]) -> None:
+    client, _ = api
+    assert client.get("/api/runs/missing/events").status_code == 404

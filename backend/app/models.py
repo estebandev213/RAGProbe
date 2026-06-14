@@ -117,3 +117,106 @@ class Question(BaseModel):
     gold_answer: str
     gold_spans: list[GoldSpan]
     source_doc_id: str | None
+
+
+# ---------------------------------------------------------------------------
+# Runs (§6.7): lifecycle status, the config matrix, and the SSE event shape the
+# run orchestrator emits as it works through generate → index → answer.
+# ---------------------------------------------------------------------------
+
+
+class RunStatus(StrEnum):
+    """Coarse run lifecycle state, persisted in ``runs.status`` (§6.7).
+
+    The orchestrator advances through these in order; the SSE event stream
+    mirrors each transition as a ``phase`` event. ``JUDGING`` is reserved for the
+    grading commit — this orchestrator stops at ``ANSWERING`` then ``DONE``.
+    """
+
+    PENDING = "pending"
+    GENERATING_EXAM = "generating_exam"
+    INDEXING = "indexing"
+    ANSWERING = "answering"
+    JUDGING = "judging"
+    DONE = "done"
+    ERROR = "error"
+
+
+class RunSettings(BaseModel):
+    """Per-run knobs, serialized into ``runs.settings`` as JSON.
+
+    ``demo_mode`` shrinks both the exam and the config matrix to fit free-tier
+    rate limits; ``n_questions`` and ``top_k`` are resolved from it at run
+    creation so the run is reproducible from its stored settings alone.
+    """
+
+    demo_mode: bool
+    n_questions: int
+    top_k: int
+
+
+class RunCreate(BaseModel):
+    """Request body for ``POST /api/runs``.
+
+    ``demo_mode`` is optional: when omitted it falls back to the application
+    default (``Settings.demo_mode``).
+    """
+
+    doc_ids: list[str]
+    demo_mode: bool | None = None
+
+
+class RunCreated(BaseModel):
+    """Response body for ``POST /api/runs``: the id of the started run."""
+
+    run_id: str
+
+
+class RunStatusResponse(BaseModel):
+    """Status snapshot for ``GET /api/runs/{id}`` and the SSE reconnect replay."""
+
+    id: str
+    status: RunStatus
+    error: str | None
+    created_at: str
+
+
+class ConfigSummary(BaseModel):
+    """One config in the matrix; mirrors a ``configs`` row.
+
+    ``label`` is the human-readable ``"{chunk_size}/{strategy}"`` shown in the
+    report and carried on progress events.
+    """
+
+    id: str
+    run_id: str
+    chunk_size: int
+    strategy: str
+    top_k: int
+    label: str
+
+
+class RunEventType(StrEnum):
+    """The kinds of event the run orchestrator publishes over SSE (§6.7)."""
+
+    PHASE = "phase"
+    PROGRESS = "progress"
+    CONFIG_DONE = "config_done"
+    RUN_DONE = "run_done"
+    ERROR = "error"
+
+
+class RunEvent(BaseModel):
+    """A single SSE event from a run (§6.7).
+
+    Fields beyond ``type`` are optional and populated per event kind: ``phase``
+    on lifecycle transitions; ``config_label``/``done``/``total`` on answering
+    progress; ``message`` on errors and human-readable notes.
+    """
+
+    type: RunEventType
+    phase: RunStatus | None = None
+    config_label: str | None = None
+    done: int | None = None
+    total: int | None = None
+    message: str | None = None

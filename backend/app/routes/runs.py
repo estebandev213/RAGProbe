@@ -1,0 +1,170 @@
+"""Run routes: create a run, poll its status, and stream live progress (§7).
+
+``POST /api/runs`` validates the requested documents, persists a pending run, and
+spawns the orchestrator (:func:`app.core.runner.execute_run`) as a background
+task. ``GET /api/runs/{id}`` returns a status snapshot. ``GET /api/runs/{id}/events``
+is a Server-Sent Events stream: it first replays the run's current status (so a
+reconnecting client catches up immediately), then forwards live events from the
+in-memory bus until the run finishes.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import sqlite3
+import uuid
+from collections.abc import AsyncIterator
+from datetime import UTC, datetime
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
+
+from app.config import get_settings
+from app.core.exam import exam_size
+from app.core.runner import TOP_K, execute_run
+from app.db import get_connection
+from app.events import bus
+from app.models import (
+    RunCreate,
+    RunCreated,
+    RunEvent,
+    RunEventType,
+    RunSettings,
+    RunStatus,
+    RunStatusResponse,
+)
+
+logger = logging.getLogger("ragprobe")
+
+router = APIRouter(tags=["runs"])
+
+# Statuses past which no further events will be published (§6.7).
+_TERMINAL = (RunStatus.DONE, RunStatus.ERROR)
+
+# Strong references to in-flight run tasks so the event loop does not garbage
+# collect them mid-run; a done-callback drops each when it completes.
+_background_tasks: set[asyncio.Task[None]] = set()
+
+
+def _spawn_run(run_id: str, doc_ids: list[str], settings: RunSettings) -> None:
+    """Launch the orchestrator as a tracked background task."""
+    task = asyncio.create_task(execute_run(run_id, doc_ids, settings))
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+
+
+@router.post("/runs", response_model=RunCreated, status_code=201)
+async def create_run(
+    body: RunCreate,
+    conn: Annotated[sqlite3.Connection, Depends(get_connection)],
+) -> RunCreated:
+    """Create a run over the given documents and start it in the background."""
+    if not body.doc_ids:
+        raise HTTPException(status_code=422, detail="At least one document is required.")
+
+    placeholders = ",".join("?" for _ in body.doc_ids)
+    found = {
+        row["id"]
+        for row in conn.execute(
+            f"SELECT id FROM documents WHERE id IN ({placeholders})", body.doc_ids
+        ).fetchall()
+    }
+    missing = [doc_id for doc_id in body.doc_ids if doc_id not in found]
+    if missing:
+        raise HTTPException(status_code=404, detail=f"Unknown document id(s): {', '.join(missing)}")
+
+    demo_mode = body.demo_mode if body.demo_mode is not None else get_settings().demo_mode
+    settings = RunSettings(
+        demo_mode=demo_mode,
+        n_questions=exam_size(demo_mode),
+        top_k=TOP_K,
+    )
+
+    run_id = uuid.uuid4().hex
+    conn.execute(
+        "INSERT INTO runs (id, status, doc_ids, settings, created_at) VALUES (?, ?, ?, ?, ?)",
+        (
+            run_id,
+            RunStatus.PENDING.value,
+            json.dumps(body.doc_ids),
+            settings.model_dump_json(),
+            datetime.now(UTC).isoformat(),
+        ),
+    )
+    conn.commit()
+
+    _spawn_run(run_id, body.doc_ids, settings)
+    logger.info("run_created", extra={"run_id": run_id, "demo_mode": demo_mode})
+    return RunCreated(run_id=run_id)
+
+
+def _row_to_status(row: sqlite3.Row) -> RunStatusResponse:
+    return RunStatusResponse(
+        id=row["id"],
+        status=RunStatus(row["status"]),
+        error=row["error"],
+        created_at=row["created_at"],
+    )
+
+
+@router.get("/runs/{run_id}", response_model=RunStatusResponse)
+async def get_run(
+    run_id: str,
+    conn: Annotated[sqlite3.Connection, Depends(get_connection)],
+) -> RunStatusResponse:
+    """Return a status snapshot for one run."""
+    row = conn.execute(
+        "SELECT id, status, error, created_at FROM runs WHERE id = ?", (run_id,)
+    ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"Run {run_id} not found.")
+    return _row_to_status(row)
+
+
+def _replay_event(status: RunStatus, error: str | None) -> RunEvent:
+    """The single catch-up event describing a run's current status to a (re)connection."""
+    if status is RunStatus.DONE:
+        return RunEvent(type=RunEventType.RUN_DONE)
+    if status is RunStatus.ERROR:
+        return RunEvent(type=RunEventType.ERROR, message=error)
+    return RunEvent(type=RunEventType.PHASE, phase=status)
+
+
+def _sse(event: RunEvent) -> str:
+    """Format a run event as an SSE ``data:`` frame."""
+    return f"data: {event.model_dump_json()}\n\n"
+
+
+@router.get("/runs/{run_id}/events")
+async def stream_events(
+    run_id: str,
+    conn: Annotated[sqlite3.Connection, Depends(get_connection)],
+) -> StreamingResponse:
+    """Stream a run's progress as Server-Sent Events, replaying current status first."""
+    row = conn.execute("SELECT status, error FROM runs WHERE id = ?", (run_id,)).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"Run {run_id} not found.")
+    status = RunStatus(row["status"])
+    error = row["error"]
+
+    async def event_stream() -> AsyncIterator[str]:
+        # Replay where the run currently stands so a fresh/reconnecting client
+        # is immediately oriented, then forward live events.
+        yield _sse(_replay_event(status, error))
+        if status in _TERMINAL:
+            return
+
+        queue = bus.subscribe(run_id)
+        try:
+            while True:
+                event = await queue.get()
+                if event is None:  # end-of-stream sentinel
+                    return
+                yield _sse(event)
+        finally:
+            bus.unsubscribe(run_id, queue)
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")

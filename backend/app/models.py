@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from enum import StrEnum
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 # Sentinel gold answer for questions that the documents do not answer (§6.3).
 # The answer generator is told to reply with exactly this string when the
@@ -129,8 +129,7 @@ class RunStatus(StrEnum):
     """Coarse run lifecycle state, persisted in ``runs.status`` (§6.7).
 
     The orchestrator advances through these in order; the SSE event stream
-    mirrors each transition as a ``phase`` event. ``JUDGING`` is reserved for the
-    grading commit — this orchestrator stops at ``ANSWERING`` then ``DONE``.
+    mirrors each transition as a ``phase`` event.
     """
 
     PENDING = "pending"
@@ -220,3 +219,79 @@ class RunEvent(BaseModel):
     done: int | None = None
     total: int | None = None
     message: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# Grading (§6.5): the three-metric judge output, the persisted grade, and the
+# human override that makes the LLM judge accountable.
+# ---------------------------------------------------------------------------
+
+# The only scores any metric can take (§6.5): wrong / partial / right.
+VALID_SCORES: tuple[float, ...] = (0.0, 0.5, 1.0)
+
+
+def _snap_score(value: float) -> float:
+    """Round a free-form score to the nearest allowed value in :data:`VALID_SCORES`.
+
+    LLM judges occasionally emit off-grid scores (e.g. ``0.7``); snapping keeps
+    a single stray number from failing JSON validation and triggering a needless
+    repair round, while still confining grades to the {0, 0.5, 1} scale.
+    """
+    return min(VALID_SCORES, key=lambda valid: abs(valid - value))
+
+
+class JudgeConfidence(StrEnum):
+    """How sure the judge is of its verdict; surfaced in the report (§6.5)."""
+
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+
+
+class JudgeVerdict(BaseModel):
+    """One metric's judgment as returned by the LLM judge in JSON mode (§6.5)."""
+
+    score: float
+    rationale: str
+    confidence: JudgeConfidence
+
+    @field_validator("score")
+    @classmethod
+    def _snap(cls, value: float) -> float:
+        return _snap_score(value)
+
+
+class Grade(BaseModel):
+    """A persisted grade for one answer; mirrors the ``grades`` table.
+
+    ``retrieval_hit`` is ``None`` for unanswerable questions, which are excluded
+    from that metric (§6.5). The composite is computed on read from these three
+    fields, so an override re-aggregates without any stored value to refresh.
+    """
+
+    id: str
+    answer_id: str
+    correctness: float
+    faithfulness: float
+    retrieval_hit: float | None
+    judge_rationale: str
+    judge_confidence: JudgeConfidence
+    overridden: bool
+
+
+class GradeOverride(BaseModel):
+    """Request body for ``PATCH /api/grades/{id}``: a manual judge correction.
+
+    Either field may be supplied; each must be an on-grid score. The route
+    rejects an empty body (nothing to change).
+    """
+
+    correctness: float | None = None
+    faithfulness: float | None = None
+
+    @field_validator("correctness", "faithfulness")
+    @classmethod
+    def _must_be_on_grid(cls, value: float | None) -> float | None:
+        if value is not None and value not in VALID_SCORES:
+            raise ValueError(f"score must be one of {VALID_SCORES}")
+        return value

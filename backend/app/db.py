@@ -112,6 +112,25 @@ _MIGRATIONS: tuple[str, ...] = (
     CREATE INDEX idx_answers_run ON answers(run_id);
     CREATE INDEX idx_answers_config ON answers(config_id);
     """,
+    # The judge (§6.5) grades every answer on three independent 0|0.5|1 metrics:
+    # correctness and faithfulness (LLM-judged) and retrieval_hit (pure
+    # span-overlap math). retrieval_hit is NULL for unanswerable questions, which
+    # are excluded from that metric. Each grade keeps the judge's rationale and
+    # confidence and an overridden flag the report UI can flip via PATCH — the
+    # composite is computed on read, so an override re-aggregates automatically.
+    """
+    CREATE TABLE grades (
+        id               TEXT PRIMARY KEY,
+        answer_id        TEXT NOT NULL REFERENCES answers(id),
+        correctness      REAL NOT NULL,
+        faithfulness     REAL NOT NULL,
+        retrieval_hit    REAL,
+        judge_rationale  TEXT NOT NULL,
+        judge_confidence TEXT NOT NULL,
+        overridden       INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE INDEX idx_grades_answer ON grades(answer_id);
+    """,
 )
 
 

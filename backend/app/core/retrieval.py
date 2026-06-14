@@ -192,6 +192,16 @@ def reciprocal_rank_fusion(
     return result if top_k is None else result[:top_k]
 
 
+def build_context(chunks: Sequence[ScoredChunk]) -> str:
+    """Render retrieved chunks as a labelled context block for an LLM prompt.
+
+    Shared by answer generation (§6.4) and the faithfulness judge (§6.5), which
+    both need the same view of the retrieved context — kept here, where
+    ``ScoredChunk`` lives, so neither caller has to import the other.
+    """
+    return "\n\n".join(f"[chunk {i + 1}]\n{chunk.text}" for i, chunk in enumerate(chunks))
+
+
 def make_retriever(
     strategy: str,
     conn: sqlite3.Connection,

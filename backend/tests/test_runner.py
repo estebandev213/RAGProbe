@@ -232,11 +232,19 @@ def _seed_run(db_path: str) -> None:
 
 
 def _groq_handler(request: httpx.Request) -> httpx.Response:
-    """Exam generation uses JSON mode; everything else is an answer call."""
+    """Route mocked Groq calls by shape: exam gen, judge verdict, or plain answer.
+
+    Exam generation and the judges both use JSON mode; they are told apart by the
+    schema embedded in the prompt (the judge's :class:`JudgeVerdict` carries a
+    ``rationale`` field, the exam's :class:`GeneratedExam` does not).
+    """
     body = json.loads(request.content)
-    if "response_format" in body:
-        return _completion({"questions": _make_questions(taxonomy_counts(DEMO_EXAM_SIZE))})
-    return _answer_response()
+    if "response_format" not in body:
+        return _answer_response()
+    prompt = body["messages"][-1]["content"]
+    if "rationale" in prompt:
+        return _completion({"score": 1, "rationale": "supported", "confidence": "high"})
+    return _completion({"questions": _make_questions(taxonomy_counts(DEMO_EXAM_SIZE))})
 
 
 @respx.mock
@@ -267,6 +275,7 @@ async def test_execute_run_completes_and_emits_events(run_db: str) -> None:
         n_configs = conn.execute("SELECT COUNT(*) FROM configs").fetchone()[0]
         n_answers = conn.execute("SELECT COUNT(*) FROM answers").fetchone()[0]
         n_questions = conn.execute("SELECT COUNT(*) FROM questions").fetchone()[0]
+        n_grades = conn.execute("SELECT COUNT(*) FROM grades").fetchone()[0]
     finally:
         conn.close()
 
@@ -274,6 +283,7 @@ async def test_execute_run_completes_and_emits_events(run_db: str) -> None:
     assert n_configs == 4
     assert n_questions == DEMO_EXAM_SIZE
     assert n_answers == 4 * DEMO_EXAM_SIZE  # every config x question answered
+    assert n_grades == n_answers  # and every answer graded
 
     types = {event.type for event in events}
     assert RunEventType.PHASE in types
@@ -281,6 +291,8 @@ async def test_execute_run_completes_and_emits_events(run_db: str) -> None:
     assert RunEventType.RUN_DONE in types
     # Progress reaches the full question count on at least one config.
     assert any(e.type is RunEventType.PROGRESS and e.done == DEMO_EXAM_SIZE for e in events)
+    # The judging phase ran (a phase event for it was emitted).
+    assert any(e.type is RunEventType.PHASE and e.phase is RunStatus.JUDGING for e in events)
 
 
 # ---------------------------------------------------------------------------

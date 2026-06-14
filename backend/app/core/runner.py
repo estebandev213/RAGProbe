@@ -1,14 +1,13 @@
 """Run orchestrator: config matrix, retrieve→answer pipeline, SSE progress (§6.7).
 
-A run is a background ``asyncio.Task`` that walks a document set through four
-phases — ``generating_exam → indexing → answering → done`` — emitting progress
-onto the in-memory event bus as it goes. This commit ends the pipeline at
-``answering``; grading (the ``judging`` phase) arrives in the next commit.
+A run is a background ``asyncio.Task`` that walks a document set through five
+phases — ``generating_exam → indexing → answering → judging → done`` — emitting
+progress onto the in-memory event bus as it goes.
 
 The matrix is the point: every (config x question) pair is answered, where a
 config is a ``chunk_size x strategy`` combination (six in full mode, four in demo
 mode for free-tier rate limits). Answers are persisted with the chunks they
-retrieved and their latency/token cost, ready for the judge to grade.
+retrieved and their latency/token cost, then the judge (§6.5) grades each one.
 
 The orchestrator owns its own SQLite connection and Groq client (both injectable
 so tests run mocked and instant); it must not borrow a request-scoped one, since
@@ -32,7 +31,8 @@ from app.core.chunking import CHUNK_SIZES
 from app.core.exam import ExamDocument, generate_exam, insert_questions
 from app.core.groq_client import ChatMessage, GroqClient, ModelRole
 from app.core.indexing import Embedder, embed_texts, index_document
-from app.core.retrieval import Retriever, ScoredChunk, make_retriever
+from app.core.judge import grade_answer, insert_grade
+from app.core.retrieval import Retriever, build_context, make_retriever
 from app.db import get_db
 from app.events import bus
 from app.models import (
@@ -108,11 +108,6 @@ def insert_configs(conn: sqlite3.Connection, configs: Sequence[ConfigSummary]) -
     conn.commit()
 
 
-def build_context(chunks: Sequence[ScoredChunk]) -> str:
-    """Render retrieved chunks as a labelled context block for the answer prompt."""
-    return "\n\n".join(f"[chunk {i + 1}]\n{chunk.text}" for i, chunk in enumerate(chunks))
-
-
 async def answer_question(
     client: GroqClient,
     retriever: Retriever,
@@ -165,6 +160,47 @@ def insert_answer(
         ),
     )
     conn.commit()
+
+
+async def judge_answers(
+    conn: sqlite3.Connection,
+    client: GroqClient,
+    run_id: str,
+    questions: Sequence[Question],
+) -> None:
+    """Grade every answer in a run, streaming judging progress (§6.5).
+
+    Walks the run's persisted answers, grades each against its question (the
+    in-memory exam, keyed by id), persists the grade, and emits a ``progress``
+    event per answer so the UI can show the judging phase advancing.
+    """
+    questions_by_id = {question.id: question for question in questions}
+    rows = conn.execute(
+        "SELECT id, question_id, answer_text, retrieved_chunk_ids FROM answers WHERE run_id = ?",
+        (run_id,),
+    ).fetchall()
+
+    total = len(rows)
+    for done, row in enumerate(rows, start=1):
+        question = questions_by_id[row["question_id"]]
+        grade = await grade_answer(
+            client,
+            conn,
+            question,
+            row["id"],
+            row["answer_text"],
+            json.loads(row["retrieved_chunk_ids"]),
+        )
+        insert_grade(conn, grade)
+        bus.publish(
+            run_id,
+            RunEvent(
+                type=RunEventType.PROGRESS,
+                phase=RunStatus.JUDGING,
+                done=done,
+                total=total,
+            ),
+        )
 
 
 def _load_documents(conn: sqlite3.Connection, doc_ids: Sequence[str]) -> list[ExamDocument]:
@@ -249,6 +285,9 @@ async def execute_run(
                     run_id,
                     RunEvent(type=RunEventType.CONFIG_DONE, config_label=config.label),
                 )
+
+            _enter_phase(conn, run_id, RunStatus.JUDGING)
+            await judge_answers(conn, groq, run_id, questions)
 
             _enter_phase(conn, run_id, RunStatus.DONE)
             bus.publish(run_id, RunEvent(type=RunEventType.RUN_DONE))

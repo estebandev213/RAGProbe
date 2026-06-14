@@ -19,7 +19,7 @@ from app.config import get_settings
 from app.db import init_db
 from app.logging_config import configure_logging
 from app.models import ErrorResponse
-from app.routes import documents, health, runs
+from app.routes import documents, health, reports, runs
 
 logger = logging.getLogger("ragprobe")
 
@@ -85,6 +85,7 @@ def create_app() -> FastAPI:
     app.include_router(health.router, prefix="/api")
     app.include_router(documents.router, prefix="/api")
     app.include_router(runs.router, prefix="/api")
+    app.include_router(reports.router, prefix="/api")
 
     logger.info(
         "app_initialized",

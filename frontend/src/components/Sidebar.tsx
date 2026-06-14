@@ -38,8 +38,8 @@ export function Sidebar() {
     {
       label: "History",
       icon: FileText,
-      to: "/history",
-      active: pathname === "/history",
+      to: null,
+      active: false,
     },
   ];
 
@@ -55,18 +55,17 @@ export function Sidebar() {
       <nav className="mt-8 flex flex-col gap-1">
         {entries.map((entry) => {
           const Icon = entry.icon;
-          const disabled = entry.to === null;
+          const locked = entry.to === null;
           return (
             <button
               key={entry.label}
               type="button"
-              disabled={disabled}
               onClick={() => entry.to && navigate(entry.to)}
               className={`flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition ${
                 entry.active
                   ? "bg-accent-soft text-accent-fg dark:bg-accent/15 dark:text-accent"
-                  : disabled
-                    ? "cursor-not-allowed text-slate-300 dark:text-slate-600"
+                  : locked
+                    ? "cursor-default text-slate-400/60 dark:text-slate-600"
                     : "text-slate-500 hover:bg-slate-100/70 hover:text-slate-800 dark:text-slate-400 dark:hover:bg-slate-800/60"
               }`}
             >

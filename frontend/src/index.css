@@ -1,3 +1,77 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: light;
+  }
+
+  html.dark {
+    color-scheme: dark;
+  }
+
+  body {
+    @apply font-sans text-slate-900 antialiased;
+  }
+
+  /* Visible keyboard focus everywhere (quality floor). */
+  :focus-visible {
+    @apply outline-none ring-2 ring-accent ring-offset-2 ring-offset-white;
+  }
+
+  html.dark :focus-visible {
+    @apply ring-offset-slate-900;
+  }
+}
+
+@layer components {
+  /* The lab-bench backdrop: a warm low-left wash meeting a cool high-right one. */
+  .app-gradient {
+    background:
+      radial-gradient(
+        1100px 760px at 0% 100%,
+        rgba(251, 146, 120, 0.16),
+        transparent 58%
+      ),
+      radial-gradient(
+        1100px 760px at 100% 0%,
+        rgba(129, 140, 248, 0.2),
+        transparent 56%
+      ),
+      #f8fafc;
+  }
+
+  html.dark .app-gradient {
+    background:
+      radial-gradient(
+        1100px 760px at 0% 100%,
+        rgba(251, 146, 120, 0.08),
+        transparent 58%
+      ),
+      radial-gradient(
+        1100px 760px at 100% 0%,
+        rgba(129, 140, 248, 0.12),
+        transparent 56%
+      ),
+      #0b1120;
+  }
+
+  .card {
+    @apply rounded-2xl border border-slate-200/80 bg-white/90 shadow-sm backdrop-blur-sm;
+  }
+
+  html.dark .card {
+    @apply border-slate-700/60 bg-slate-900/70;
+  }
+}
+
+/* Respect users who prefer reduced motion. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

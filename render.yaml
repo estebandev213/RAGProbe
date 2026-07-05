@@ -1,0 +1,15 @@
+# Render blueprint (fallback deploy target; Railway is primary).
+# Free-tier notes: ~1 min cold start after idle, 512MB RAM (bge-small fits,
+# keep one worker), ephemeral disk — uploaded documents and runs reset on
+# redeploy, which is acceptable for a demo and called out in the README.
+services:
+  - type: web
+    name: ragprobe
+    runtime: docker
+    plan: free
+    healthCheckPath: /api/health
+    envVars:
+      - key: GROQ_API_KEY
+        sync: false # set in the Render dashboard, never committed
+      - key: DEMO_MODE
+        value: "true"

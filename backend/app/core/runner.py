@@ -20,7 +20,6 @@ import asyncio
 import json
 import logging
 import sqlite3
-import time
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -29,9 +28,15 @@ from itertools import product
 from app.config import get_settings
 from app.core.chunking import CHUNK_SIZES
 from app.core.exam import ExamDocument, generate_exam, insert_questions
-from app.core.groq_client import ChatMessage, GroqClient, ModelRole
 from app.core.indexing import Embedder, embed_texts, index_document
 from app.core.judge import grade_answer, insert_grade
+from app.core.llm_client import (
+    ChatMessage,
+    LLMClient,
+    ModelRole,
+    answer_client_from_settings,
+    judge_client_from_settings,
+)
 from app.core.retrieval import Retriever, build_context, make_retriever
 from app.db import get_db
 from app.events import bus
@@ -110,7 +115,7 @@ def insert_configs(conn: sqlite3.Connection, configs: Sequence[ConfigSummary]) -
 
 
 async def answer_question(
-    client: GroqClient,
+    client: LLMClient,
     retriever: Retriever,
     question: Question,
     config: ConfigSummary,
@@ -123,14 +128,14 @@ async def answer_question(
         ChatMessage(role="user", content=f"Context:\n{context}\n\nQuestion: {question.question}"),
     ]
 
-    started = time.monotonic()
     result = await client.chat(messages, role=ModelRole.GENERATION)
-    latency_ms = int((time.monotonic() - started) * 1000)
 
     return AnswerResult(
         answer_text=result.text.strip(),
         retrieved_chunk_ids=[chunk.chunk_id for chunk in chunks],
-        latency_ms=latency_ms,
+        # The successful attempt's wall time only (see ChatResult): mean latency
+        # on the report reflects the provider, not this client's rate limiter.
+        latency_ms=result.latency_ms,
         prompt_tokens=result.prompt_tokens,
         completion_tokens=result.completion_tokens,
     )
@@ -165,7 +170,7 @@ def insert_answer(
 
 async def judge_answers(
     conn: sqlite3.Connection,
-    client: GroqClient,
+    client: LLMClient,
     run_id: str,
     questions: Sequence[Question],
 ) -> None:
@@ -232,7 +237,8 @@ async def execute_run(
     settings: RunSettings,
     *,
     embed: Embedder = embed_texts,
-    client: GroqClient | None = None,
+    client: LLMClient | None = None,
+    judge_client: LLMClient | None = None,
 ) -> None:
     """Drive a run through its phases, persisting results and streaming progress.
 
@@ -240,9 +246,25 @@ async def execute_run(
     phase emits a ``progress`` event per (config, question) and a ``config_done``
     per finished config. Any failure flips the run to ``error`` with the message,
     emits an ``error`` event, and always closes the event stream.
+
+    Grading uses ``judge_client`` when available — in production that is the
+    independent Gemini client (built here when ``GEMINI_API_KEY`` is set), so
+    the model that grades is not the model that answered. Without one, judging
+    falls back to the answer client.
     """
     owns_client = client is None
-    groq = client or GroqClient.from_settings(get_settings())
+    answerer = client or answer_client_from_settings(get_settings())
+    # Only build a judge client when the caller didn't inject either client
+    # (tests inject `client` and expect no surprise second provider).
+    owns_judge = judge_client is None and client is None
+    judge = judge_client or (judge_client_from_settings(get_settings()) if owns_judge else None)
+    if judge is None:
+        judge = answerer
+        owns_judge = False
+    logger.info(
+        "run_clients",
+        extra={"run_id": run_id, "independent_judge": judge is not answerer},
+    )
 
     with get_db() as conn:
         try:
@@ -251,7 +273,7 @@ async def execute_run(
                 raise ValueError("Run has no resolvable documents to evaluate.")
 
             _enter_phase(conn, run_id, RunStatus.GENERATING_EXAM)
-            questions = await generate_exam(groq, run_id, documents, settings.n_questions)
+            questions = await generate_exam(answerer, run_id, documents, settings.n_questions)
             insert_questions(conn, questions)
 
             _enter_phase(conn, run_id, RunStatus.INDEXING)
@@ -270,7 +292,7 @@ async def execute_run(
             for config in configs:
                 retriever = retrievers[config.strategy]
                 for done, question in enumerate(questions, start=1):
-                    result = await answer_question(groq, retriever, question, config)
+                    result = await answer_question(answerer, retriever, question, config)
                     insert_answer(conn, run_id, config.id, question.id, result)
                     bus.publish(
                         run_id,
@@ -288,7 +310,7 @@ async def execute_run(
                 )
 
             _enter_phase(conn, run_id, RunStatus.JUDGING)
-            await judge_answers(conn, groq, run_id, questions)
+            await judge_answers(conn, judge, run_id, questions)
 
             _enter_phase(conn, run_id, RunStatus.DONE)
             bus.publish(run_id, RunEvent(type=RunEventType.RUN_DONE))
@@ -307,5 +329,7 @@ async def execute_run(
             logger.exception("run_failed", extra={"run_id": run_id})
         finally:
             bus.close(run_id)
+            if owns_judge:
+                await judge.aclose()
             if owns_client:
-                await groq.aclose()
+                await answerer.aclose()

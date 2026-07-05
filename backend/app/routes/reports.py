@@ -150,7 +150,7 @@ def _to_failure_row(conn: sqlite3.Connection, row: sqlite3.Row) -> FailureRow:
     """Build one drill-down row: load chunks, score span hits, derive flags."""
     chunk_ids = json.loads(row["retrieved_chunk_ids"])
     chunks = load_chunks(conn, chunk_ids)
-    spans = [GoldSpan(**span) for span in json.loads(row["gold_spans"])]
+    spans = [GoldSpan.model_validate(span) for span in json.loads(row["gold_spans"])]
 
     correctness = row["correctness"]
     faithfulness = row["faithfulness"]
@@ -202,6 +202,8 @@ def _row_to_grade(row: sqlite3.Row) -> Grade:
         judge_rationale=row["judge_rationale"],
         judge_confidence=JudgeConfidence(row["judge_confidence"]),
         overridden=bool(row["overridden"]),
+        judge_prompt_tokens=row["judge_prompt_tokens"],
+        judge_completion_tokens=row["judge_completion_tokens"],
     )
 
 
@@ -219,8 +221,9 @@ async def override_grade(
         )
 
     row = conn.execute(
-        "SELECT id, answer_id, correctness, faithfulness, retrieval_hit, "
-        "judge_rationale, judge_confidence, overridden FROM grades WHERE id = ?",
+        "SELECT id, answer_id, correctness, faithfulness, retrieval_hit, judge_rationale, "
+        "judge_confidence, overridden, judge_prompt_tokens, judge_completion_tokens "
+        "FROM grades WHERE id = ?",
         (grade_id,),
     ).fetchone()
     if row is None:
@@ -236,8 +239,9 @@ async def override_grade(
     logger.info("grade_overridden", extra={"grade_id": grade_id})
 
     updated = conn.execute(
-        "SELECT id, answer_id, correctness, faithfulness, retrieval_hit, "
-        "judge_rationale, judge_confidence, overridden FROM grades WHERE id = ?",
+        "SELECT id, answer_id, correctness, faithfulness, retrieval_hit, judge_rationale, "
+        "judge_confidence, overridden, judge_prompt_tokens, judge_completion_tokens "
+        "FROM grades WHERE id = ?",
         (grade_id,),
     ).fetchone()
     return _row_to_grade(updated)

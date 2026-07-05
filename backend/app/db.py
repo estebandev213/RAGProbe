@@ -131,6 +131,13 @@ _MIGRATIONS: tuple[str, ...] = (
     );
     CREATE INDEX idx_grades_answer ON grades(answer_id);
     """,
+    # Judge cost accountability: record what each grade cost to produce, so a
+    # run's total LLM spend is reconstructible (answers carry their own token
+    # counts already). Deterministic verdicts (abstentions) cost zero.
+    """
+    ALTER TABLE grades ADD COLUMN judge_prompt_tokens INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE grades ADD COLUMN judge_completion_tokens INTEGER NOT NULL DEFAULT 0;
+    """,
 )
 
 
@@ -147,6 +154,12 @@ def connect(database_path: str | None = None) -> sqlite3.Connection:
     conn = sqlite3.connect(path, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
+    # WAL lets report reads proceed while the run orchestrator writes, and the
+    # explicit busy timeout turns residual lock contention into a short wait
+    # instead of an SQLITE_BUSY error surfacing as a 500 mid-run. (Both are
+    # harmless no-ops for :memory: databases.)
+    conn.execute("PRAGMA busy_timeout = 5000")
+    conn.execute("PRAGMA journal_mode = WAL")
     # Load sqlite-vec on every connection so the vec_chunks virtual table is
     # available for both migrations and queries.
     conn.enable_load_extension(True)

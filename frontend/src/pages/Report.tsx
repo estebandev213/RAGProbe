@@ -36,17 +36,18 @@ function Highlight({
   caption: string;
 }) {
   return (
-    <div className="card flex items-center justify-between gap-3 p-4">
+    <div className="card group relative flex items-center justify-between gap-4 overflow-hidden px-5 py-7 transition hover:-translate-y-0.5 hover:shadow-lg">
+      <div className="absolute inset-x-0 top-0 h-0.5 bg-accent/25 transition group-hover:bg-accent/60" />
       <div className="min-w-0">
-        <p className="text-xs font-medium text-slate-500 dark:text-slate-400">
+        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
           {label}
         </p>
-        <p className="mt-0.5 font-mono text-2xl font-semibold text-slate-800 dark:text-slate-100">
+        <p className="mt-1.5 font-mono text-4xl font-semibold tracking-tight text-slate-800 dark:text-slate-100">
           {value}
         </p>
         <p className="truncate text-xs text-slate-400">{caption}</p>
       </div>
-      <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-accent-soft text-accent">
+      <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl bg-accent-soft text-accent ring-1 ring-accent/15 transition group-hover:ring-accent/30">
         {icon}
       </div>
     </div>
@@ -248,17 +249,18 @@ export function ReportPage() {
         />
         <a
           href="#failures"
-          className="card flex items-center justify-between gap-3 bg-accent-soft/60 p-4 transition hover:bg-accent-soft dark:bg-accent/10 dark:hover:bg-accent/20"
+          className="card group relative flex items-center justify-between gap-4 overflow-hidden bg-accent-soft/60 px-5 py-7 transition hover:-translate-y-0.5 hover:bg-accent-soft hover:shadow-lg dark:bg-accent/10 dark:hover:bg-accent/20"
         >
-          <div>
-            <p className="font-semibold text-slate-800 dark:text-slate-100">
+          <div className="absolute inset-x-0 top-0 h-0.5 bg-accent/25 transition group-hover:bg-accent/60" />
+          <div className="min-w-0">
+            <p className="font-display text-lg font-semibold text-slate-800 dark:text-slate-100">
               Inspect failures
             </p>
-            <p className="text-xs text-slate-500 dark:text-slate-400">
+            <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
               Explore where each configuration succeeded and failed.
             </p>
           </div>
-          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-white text-accent dark:bg-slate-900">
+          <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl bg-white text-accent ring-1 ring-accent/15 transition group-hover:ring-accent/30 dark:bg-slate-900">
             <ListChecks size={20} />
           </div>
         </a>

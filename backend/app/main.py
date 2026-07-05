@@ -2,17 +2,20 @@
 
 Wires together configuration (fail-fast), structured logging, CORS for the
 local frontend dev server, a uniform error envelope, and the health route.
-Static serving of the built SPA is added with the Docker build (commit 13).
+When a built SPA is present (``Settings.static_dir``, the Docker image), the
+app also serves it — one container, one port.
 """
 
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.config import get_settings
@@ -65,6 +68,37 @@ def _register_exception_handlers(app: FastAPI) -> None:
     app.add_exception_handler(Exception, _unhandled_exception_handler)
 
 
+def _mount_spa(app: FastAPI, static_dir: str) -> None:
+    """Serve the built SPA when its dist directory exists (production image).
+
+    Fingerprinted assets are mounted directly; every other non-API path falls
+    back to ``index.html`` so client-side routes (``/runs/{id}/report``) survive
+    a full page load. Registered *after* the API routers, so ``/api/*`` always
+    wins. A no-op in development, where Vite serves the frontend.
+    """
+    dist = Path(static_dir).resolve()
+    index = dist / "index.html"
+    if not index.is_file():
+        logger.info("spa_not_mounted", extra={"static_dir": static_dir})
+        return
+
+    assets = dist / "assets"
+    if assets.is_dir():
+        app.mount("/assets", StaticFiles(directory=assets), name="assets")
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def spa(full_path: str) -> FileResponse:
+        # Real files at the dist root (samples/, favicon, manifest) are served
+        # as-is; anything else is a client-side route and gets the shell. The
+        # resolve() + containment check rejects path traversal.
+        candidate = (dist / full_path).resolve()
+        if full_path and candidate.is_file() and candidate.is_relative_to(dist):
+            return FileResponse(candidate)
+        return FileResponse(index)
+
+    logger.info("spa_mounted", extra={"static_dir": str(dist)})
+
+
 def create_app() -> FastAPI:
     """Build and configure the FastAPI application."""
     configure_logging()
@@ -86,6 +120,7 @@ def create_app() -> FastAPI:
     app.include_router(documents.router, prefix="/api")
     app.include_router(runs.router, prefix="/api")
     app.include_router(reports.router, prefix="/api")
+    _mount_spa(app, settings.static_dir)
 
     logger.info(
         "app_initialized",

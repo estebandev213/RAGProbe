@@ -1,0 +1,19 @@
+# Build artifacts and local state that must not leak into the image
+.git
+.github
+.venv
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+**/.mypy_cache
+**/.ruff_cache
+frontend/node_modules
+frontend/dist
+data
+*.db
+*.db-*
+.env
+.env.*
+*.md
+!backend/fixtures/**/*.md
+!frontend/public/samples/*.md

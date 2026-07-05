@@ -3,7 +3,7 @@
 The span-overlap math, composite blend, and abstention rules are pure or
 deterministic, so they are tested without any network. The grade-override route
 is exercised through a seeded SQLite database and a ``TestClient``; the LLM
-judges' parse/repair path is already covered in ``test_groq_client``.
+judges' parse/repair path is already covered in ``test_llm_client``.
 """
 
 import json
@@ -31,6 +31,7 @@ from app.models import (
     JudgeVerdict,
     QType,
     Question,
+    SpanRange,
 )
 from fastapi.testclient import TestClient
 
@@ -102,6 +103,30 @@ def test_miss_just_under_threshold() -> None:
 def test_hit_across_multiple_chunks() -> None:
     # No single chunk reaches 50%, but the best one does → hit.
     assert span_is_hit(_span(0, 10), [_chunk(0, 3), _chunk(3, 9)]) is True
+
+
+def test_hit_on_alternate_occurrence() -> None:
+    # The quote also appears at [500, 510); retrieval covered that copy, not
+    # the primary — identical text found elsewhere must count as a hit.
+    span = GoldSpan(
+        doc_id="doc1",
+        start_char=10,
+        end_char=20,
+        alternates=[SpanRange(doc_id="doc1", start_char=500, end_char=510)],
+    )
+    assert span_is_hit(span, [_chunk(490, 600)]) is True
+    # Neither the primary nor any alternate covered → still a miss.
+    assert span_is_hit(span, [_chunk(700, 800)]) is False
+
+
+def test_alternate_in_other_document_counts() -> None:
+    span = GoldSpan(
+        doc_id="doc1",
+        start_char=10,
+        end_char=20,
+        alternates=[SpanRange(doc_id="doc2", start_char=0, end_char=10)],
+    )
+    assert span_is_hit(span, [_chunk(0, 50, doc_id="doc2")]) is True
 
 
 # ---------------------------------------------------------------------------
@@ -176,33 +201,42 @@ def test_judge_verdict_snaps_above_one() -> None:
 
 def test_is_abstention_tolerates_punctuation() -> None:
     assert is_abstention("not_in_documents.") is True
+    assert is_abstention("The answer is NOT_IN_DOCUMENTS.") is True
     assert is_abstention("The capital is Paris.") is False
+
+
+def test_is_abstention_rejects_hedged_continuation() -> None:
+    # A reply that abstains *and then answers anyway* asserts real claims — it
+    # must be graded as an answer, not waved through as a perfect abstention.
+    hedged = "NOT_IN_DOCUMENTS. However, based on general knowledge, the capital is Paris."
+    assert is_abstention(hedged) is False
 
 
 async def test_correctness_rewards_correct_abstention() -> None:
     q = _question(QType.UNANSWERABLE, [])
     async with _client() as client:
-        verdict = await judge_correctness(client, q, NOT_IN_DOCUMENTS)
+        verdict, usage = await judge_correctness(client, q, NOT_IN_DOCUMENTS)
     assert verdict.score == 1.0
+    assert usage.prompt_tokens == 0  # deterministic verdicts cost no tokens
 
 
 async def test_correctness_punishes_hallucinated_unanswerable() -> None:
     q = _question(QType.UNANSWERABLE, [])
     async with _client() as client:
-        verdict = await judge_correctness(client, q, "Some confident made-up answer.")
+        verdict, _usage = await judge_correctness(client, q, "Some confident made-up answer.")
     assert verdict.score == 0.0
 
 
 async def test_correctness_punishes_abstention_on_answerable() -> None:
     q = _question(QType.FACTUAL, [_span(0, 10)])
     async with _client() as client:
-        verdict = await judge_correctness(client, q, NOT_IN_DOCUMENTS)
+        verdict, _usage = await judge_correctness(client, q, NOT_IN_DOCUMENTS)
     assert verdict.score == 0.0
 
 
 async def test_faithfulness_rewards_abstention() -> None:
     async with _client() as client:
-        verdict = await judge_faithfulness(client, NOT_IN_DOCUMENTS, [])
+        verdict, _usage = await judge_faithfulness(client, NOT_IN_DOCUMENTS, [])
     assert verdict.score == 1.0
 
 

@@ -6,7 +6,6 @@ build-backend = "hatchling.build"
 name = "ragprobe-backend"
 version = "0.1.0"
 description = "RAGProbe backend — auto-generate exams from documents and benchmark RAG configurations."
-readme = "../README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "fastapi",

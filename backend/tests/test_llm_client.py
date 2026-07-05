@@ -1,8 +1,8 @@
-"""Tests for the async Groq client (§6.6).
+"""Tests for the async, provider-agnostic LLM client (§6.6).
 
 All HTTP traffic is intercepted by ``respx`` and all waiting is driven by a
 ``FakeClock`` that advances virtual time on ``sleep`` — so the suite needs no
-network, no real ``GROQ_API_KEY``, and no wall-clock delays.
+network, no real API keys, and no wall-clock delays.
 """
 
 import json
@@ -11,18 +11,21 @@ import logging
 import httpx
 import pytest
 import respx
-from app.core.groq_client import (
+from app.config import Settings
+from app.core.llm_client import (
     BASE_DELAY,
     MAX_ATTEMPTS,
     MAX_DELAY,
     ChatMessage,
-    GroqClient,
-    GroqError,
-    GroqJSONError,
+    LLMClient,
+    LLMError,
+    LLMJSONError,
     ModelRole,
     TokenBucket,
     _backoff_seconds,
     _parse_retry_after,
+    answer_client_from_settings,
+    judge_client_from_settings,
     strip_code_fences,
 )
 from pydantic import BaseModel
@@ -52,9 +55,9 @@ class FakeClock:
         self.now += delay
 
 
-def make_client(clock: FakeClock | None = None) -> GroqClient:
+def make_client(clock: FakeClock | None = None) -> LLMClient:
     clock = clock or FakeClock()
-    return GroqClient(
+    return LLMClient(
         api_key="test-key",
         generation_model=GEN_MODEL,
         fast_model=FAST_MODEL,
@@ -165,7 +168,7 @@ async def test_retries_on_5xx_with_exponential_backoff() -> None:
 async def test_gives_up_after_max_attempts() -> None:
     route = respx.post(URL).mock(return_value=httpx.Response(429))
     async with make_client() as client:
-        with pytest.raises(GroqError):
+        with pytest.raises(LLMError):
             await client.chat(_user(), role=ModelRole.GENERATION)
 
     assert route.call_count == MAX_ATTEMPTS
@@ -175,7 +178,7 @@ async def test_gives_up_after_max_attempts() -> None:
 async def test_non_retryable_4xx_raises_immediately() -> None:
     route = respx.post(URL).mock(return_value=httpx.Response(401, json={"error": "bad key"}))
     async with make_client() as client:
-        with pytest.raises(GroqError):
+        with pytest.raises(LLMError):
             await client.chat(_user(), role=ModelRole.GENERATION)
 
     assert route.call_count == 1
@@ -223,7 +226,7 @@ async def test_json_mode_raises_after_repair_fails() -> None:
         ]
     )
     async with make_client() as client:
-        with pytest.raises(GroqJSONError):
+        with pytest.raises(LLMJSONError):
             await client.json_mode("grade", _Grade, role=ModelRole.GENERATION)
 
 
@@ -245,12 +248,38 @@ async def test_structured_log_has_model_latency_tokens_attempts(
         async with make_client() as client:
             await client.chat(_user(), role=ModelRole.GENERATION)
 
-    record = next(r for r in caplog.records if r.getMessage() == "groq_call")
+    record = next(r for r in caplog.records if r.getMessage() == "llm_call")
     assert record.model == GEN_MODEL
     assert record.prompt_tokens == 7
     assert record.completion_tokens == 2
     assert record.attempt == 1
+    assert record.host == "api.groq.com"
     assert hasattr(record, "latency_ms")
+
+
+# ---------------------------------------------------------------------------
+# Client factories (answerer vs independent judge)
+# ---------------------------------------------------------------------------
+
+
+def _settings(**overrides: str) -> Settings:
+    return Settings(_env_file=None, groq_api_key="groq-key", **overrides)  # type: ignore[call-arg]
+
+
+async def test_judge_factory_returns_none_without_gemini_key() -> None:
+    assert judge_client_from_settings(_settings()) is None
+
+
+async def test_judge_factory_builds_gemini_client_when_key_set() -> None:
+    judge = judge_client_from_settings(_settings(gemini_api_key="gem-key"))
+    assert judge is not None
+    async with judge:
+        assert judge.host == "generativelanguage.googleapis.com"
+
+
+async def test_answer_factory_targets_groq() -> None:
+    async with answer_client_from_settings(_settings()) as answerer:
+        assert answerer.host == "api.groq.com"
 
 
 # ---------------------------------------------------------------------------

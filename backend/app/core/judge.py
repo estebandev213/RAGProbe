@@ -27,7 +27,7 @@ import sqlite3
 import uuid
 from collections.abc import Sequence
 
-from app.core.groq_client import GroqClient, GroqJSONError, ModelRole
+from app.core.llm_client import LLMClient, LLMJSONError, ModelRole, TokenUsage
 from app.core.retrieval import ScoredChunk, build_context
 from app.core.scoring import retrieval_hit_for_question
 from app.models import (
@@ -63,14 +63,26 @@ _FAITHFULNESS_SYSTEM = (
 )
 
 
+# How many characters beyond the sentinel itself an abstention may carry —
+# enough for wrapping punctuation or a short frame ("The answer is
+# NOT_IN_DOCUMENTS."), but not for a hedged continuation ("NOT_IN_DOCUMENTS.
+# However, the answer is likely...") which asserts real claims and must be
+# graded as an answer, not waved through with a perfect abstention score.
+_ABSTENTION_MAX_EXTRA_CHARS = 32
+
+
 def is_abstention(answer_text: str) -> bool:
-    """Whether the answer is the strict-grounding refusal sentinel (§6.4).
+    """Whether the answer is (essentially only) the refusal sentinel (§6.4).
 
     The answer prompt instructs the model to reply with exactly
-    ``NOT_IN_DOCUMENTS``; we match it case-insensitively anywhere in the reply to
-    tolerate trailing punctuation or stray whitespace.
+    ``NOT_IN_DOCUMENTS``. The sentinel must constitute approximately the whole
+    reply: matched case-insensitively, tolerating punctuation and a short frame
+    around it, but rejecting any reply long enough to also assert content.
     """
-    return NOT_IN_DOCUMENTS in answer_text.upper()
+    normalized = answer_text.strip().upper()
+    if NOT_IN_DOCUMENTS not in normalized:
+        return False
+    return len(normalized) <= len(NOT_IN_DOCUMENTS) + _ABSTENTION_MAX_EXTRA_CHARS
 
 
 def _combine_confidence(a: JudgeConfidence, b: JudgeConfidence) -> JudgeConfidence:
@@ -83,34 +95,50 @@ def _deterministic(score: float, rationale: str) -> JudgeVerdict:
     return JudgeVerdict(score=score, rationale=rationale, confidence=JudgeConfidence.HIGH)
 
 
-async def _judge_one(client: GroqClient, system: str, prompt: str, *, metric: str) -> JudgeVerdict:
-    """Run one LLM judge call, degrading to a low-confidence 0 if JSON can't parse."""
+async def _judge_one(
+    client: LLMClient, system: str, prompt: str, *, metric: str
+) -> tuple[JudgeVerdict, TokenUsage]:
+    """Run one LLM judge call, degrading to a low-confidence 0 if JSON can't parse.
+
+    Returns the verdict plus the tokens the judging itself consumed, so grading
+    cost is accounted for per grade rather than silently discarded.
+    """
     try:
-        return await client.json_mode(
+        return await client.json_mode_with_usage(
             prompt, JudgeVerdict, role=ModelRole.GENERATION, system=system
         )
-    except GroqJSONError:
+    except LLMJSONError:
         logger.warning("judge_invalid_json", extra={"metric": metric})
-        return JudgeVerdict(
-            score=0.0,
-            rationale="Judge response could not be parsed.",
-            confidence=JudgeConfidence.LOW,
+        return (
+            JudgeVerdict(
+                score=0.0,
+                rationale="Judge response could not be parsed.",
+                confidence=JudgeConfidence.LOW,
+            ),
+            TokenUsage(),
         )
 
 
 async def judge_correctness(
-    client: GroqClient, question: Question, answer_text: str
-) -> JudgeVerdict:
-    """Grade an answer's correctness, short-circuiting the abstention cases (§6.5)."""
+    client: LLMClient, question: Question, answer_text: str
+) -> tuple[JudgeVerdict, TokenUsage]:
+    """Grade an answer's correctness, short-circuiting the abstention cases (§6.5).
+
+    Deterministic (abstention) verdicts consume no tokens; LLM verdicts return
+    the judge call's usage alongside.
+    """
     abstained = is_abstention(answer_text)
     if question.qtype is QType.UNANSWERABLE:
-        return (
+        verdict = (
             _deterministic(1.0, "Correctly abstained on an unanswerable question.")
             if abstained
             else _deterministic(0.0, "Answered a question the documents do not cover.")
         )
+        return verdict, TokenUsage()
     if abstained:
-        return _deterministic(0.0, "Abstained on a question the documents do answer.")
+        return _deterministic(0.0, "Abstained on a question the documents do answer."), (
+            TokenUsage()
+        )
 
     prompt = (
         f"Question:\n{question.question}\n\n"
@@ -123,11 +151,11 @@ async def judge_correctness(
 
 
 async def judge_faithfulness(
-    client: GroqClient, answer_text: str, chunks: Sequence[ScoredChunk]
-) -> JudgeVerdict:
+    client: LLMClient, answer_text: str, chunks: Sequence[ScoredChunk]
+) -> tuple[JudgeVerdict, TokenUsage]:
     """Grade whether the answer is supported by its retrieved context (§6.5)."""
     if is_abstention(answer_text):
-        return _deterministic(1.0, "Abstention asserts nothing to verify.")
+        return _deterministic(1.0, "Abstention asserts nothing to verify."), TokenUsage()
 
     prompt = (
         f"Context:\n{build_context(chunks)}\n\n"
@@ -167,7 +195,7 @@ def load_chunks(conn: sqlite3.Connection, chunk_ids: Sequence[str]) -> list[Scor
 
 
 async def grade_answer(
-    client: GroqClient,
+    client: LLMClient,
     conn: sqlite3.Connection,
     question: Question,
     answer_id: str,
@@ -177,8 +205,8 @@ async def grade_answer(
     """Grade one answer on all three metrics and assemble a persistable grade (§6.5)."""
     chunks = load_chunks(conn, retrieved_chunk_ids)
     retrieval_hit = retrieval_hit_for_question(question, chunks)
-    correctness = await judge_correctness(client, question, answer_text)
-    faithfulness = await judge_faithfulness(client, answer_text, chunks)
+    correctness, correctness_usage = await judge_correctness(client, question, answer_text)
+    faithfulness, faithfulness_usage = await judge_faithfulness(client, answer_text, chunks)
 
     return Grade(
         id=uuid.uuid4().hex,
@@ -191,6 +219,10 @@ async def grade_answer(
         ),
         judge_confidence=_combine_confidence(correctness.confidence, faithfulness.confidence),
         overridden=False,
+        judge_prompt_tokens=correctness_usage.prompt_tokens + faithfulness_usage.prompt_tokens,
+        judge_completion_tokens=(
+            correctness_usage.completion_tokens + faithfulness_usage.completion_tokens
+        ),
     )
 
 
@@ -198,7 +230,8 @@ def insert_grade(conn: sqlite3.Connection, grade: Grade) -> None:
     """Persist one grade row."""
     conn.execute(
         "INSERT INTO grades (id, answer_id, correctness, faithfulness, retrieval_hit, "
-        "judge_rationale, judge_confidence, overridden) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        "judge_rationale, judge_confidence, overridden, judge_prompt_tokens, "
+        "judge_completion_tokens) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             grade.id,
             grade.answer_id,
@@ -208,6 +241,8 @@ def insert_grade(conn: sqlite3.Connection, grade: Grade) -> None:
             grade.judge_rationale,
             grade.judge_confidence.value,
             int(grade.overridden),
+            grade.judge_prompt_tokens,
+            grade.judge_completion_tokens,
         ),
     )
     conn.commit()

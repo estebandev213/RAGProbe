@@ -10,7 +10,7 @@ Per-question robustness, not all-or-nothing: a question is discarded when it is
 semantically inconsistent (e.g. an "unanswerable" with quotes) or when any of
 its quotes cannot be located. After each round the generator re-requests only
 the *shortfall* per type, until the quota is met or :data:`MAX_ROUNDS` is hit.
-Low-level JSON validity/repair is already handled by ``GroqClient.json_mode``.
+Low-level JSON validity/repair is already handled by ``LLMClient.json_mode``.
 
 Quote location is exact first, then a whitespace- and case-insensitive fuzzy
 fallback that still returns offsets into the *original* text — so the
@@ -27,8 +27,9 @@ import uuid
 from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass
+from itertools import combinations
 
-from app.core.groq_client import GroqClient, GroqJSONError, ModelRole
+from app.core.llm_client import LLMClient, LLMJSONError, ModelRole
 from app.models import (
     NOT_IN_DOCUMENTS,
     GeneratedExam,
@@ -36,6 +37,7 @@ from app.models import (
     GoldSpan,
     QType,
     Question,
+    SpanRange,
 )
 
 logger = logging.getLogger("ragprobe")
@@ -59,6 +61,15 @@ MAX_DOC_CHARS = 12_000
 
 # Bound on regeneration rounds so a stubborn model can't loop forever.
 MAX_ROUNDS = 4
+
+# Minimum character gap between a multi-hop question's gold spans (unless they
+# sit in different documents). Without this check, two quotes from adjacent
+# sentences pass as "multi-hop" — a factual question in disguise that one
+# retrieved chunk covers entirely, inflating multi-hop retrieval scores. The
+# ideal rule (spans not coverable by a single smallest-size chunk, i.e. a
+# ~1600-char gap) would make multi-hop unsatisfiable on small demo documents,
+# so this is a pragmatic floor of roughly a paragraph or two.
+MIN_MULTIHOP_SPAN_GAP_CHARS = 400
 
 _WHITESPACE = re.compile(r"\s+")
 
@@ -105,6 +116,11 @@ def _normalize_ws(text: str) -> str:
     return _WHITESPACE.sub(" ", text).strip().lower()
 
 
+# Bound on recorded alternate occurrences of one quote, so pathologically
+# repetitive text (a phrase on every page) cannot bloat the stored spans.
+MAX_ALTERNATE_OCCURRENCES = 20
+
+
 def locate_quote(quote: str, text: str) -> tuple[int, int] | None:
     """Find ``quote`` in ``text``, returning a ``(start, end)`` char range or ``None``.
 
@@ -112,31 +128,74 @@ def locate_quote(quote: str, text: str) -> tuple[int, int] | None:
     differences in whitespace and case while still reporting offsets into the
     original ``text``.
     """
-    exact = text.find(quote)
-    if exact != -1:
-        return exact, exact + len(quote)
+    occurrences = locate_quote_all(quote, text)
+    return occurrences[0] if occurrences else None
+
+
+def locate_quote_all(quote: str, text: str) -> list[tuple[int, int]]:
+    """Every occurrence of ``quote`` in ``text`` as ``(start, end)`` ranges.
+
+    Exact substring matches win; only when there are none does the fuzzy
+    (whitespace- and case-insensitive) pattern run. Ranges are returned in
+    document order, capped at :data:`MAX_ALTERNATE_OCCURRENCES` + 1.
+    """
+    limit = MAX_ALTERNATE_OCCURRENCES + 1
+    exact: list[tuple[int, int]] = []
+    start = text.find(quote)
+    while start != -1 and len(exact) < limit:
+        exact.append((start, start + len(quote)))
+        start = text.find(quote, start + 1)
+    if exact:
+        return exact
 
     needle = _normalize_ws(quote)
     if not needle:
-        return None
+        return []
     # Match the quote's tokens separated by arbitrary whitespace in the source.
     pattern = re.compile(
         r"\s+".join(re.escape(token) for token in needle.split(" ")),
         re.IGNORECASE,
     )
-    match = pattern.search(text)
-    if match:
-        return match.start(), match.end()
-    return None
+    return [(m.start(), m.end()) for m in pattern.finditer(text)][:limit]
 
 
 def _locate_span(quote: str, documents: Sequence[ExamDocument]) -> GoldSpan | None:
-    """Locate ``quote`` across all documents; return the first hit as a span."""
+    """Locate ``quote`` across all documents, recording every occurrence.
+
+    The first occurrence (scanning documents in order) becomes the primary
+    span; all further occurrences — in the same document or any other — are
+    stored as ``alternates``, so retrieval of a repeated-but-identical passage
+    scores as a hit instead of a false miss (§6.5).
+    """
+    ranges: list[SpanRange] = []
     for doc in documents:
-        located = locate_quote(quote, doc.text)
-        if located is not None:
-            return GoldSpan(doc_id=doc.doc_id, start_char=located[0], end_char=located[1])
-    return None
+        for start, end in locate_quote_all(quote, doc.text):
+            ranges.append(SpanRange(doc_id=doc.doc_id, start_char=start, end_char=end))
+    if not ranges:
+        return None
+    primary = ranges[0]
+    return GoldSpan(
+        doc_id=primary.doc_id,
+        start_char=primary.start_char,
+        end_char=primary.end_char,
+        alternates=ranges[1 : MAX_ALTERNATE_OCCURRENCES + 1],
+    )
+
+
+def _spans_are_separated(spans: Sequence[GoldSpan]) -> bool:
+    """Whether some pair of spans plausibly comes from *distinct* passages.
+
+    True when any two spans live in different documents or are at least
+    :data:`MIN_MULTIHOP_SPAN_GAP_CHARS` apart in the same document. Used to
+    reject "multi-hop" questions whose evidence is really one passage.
+    """
+    for a, b in combinations(spans, 2):
+        if a.doc_id != b.doc_id:
+            return True
+        gap = max(a.start_char, b.start_char) - min(a.end_char, b.end_char)
+        if gap >= MIN_MULTIHOP_SPAN_GAP_CHARS:
+            return True
+    return False
 
 
 def resolve_question(
@@ -176,6 +235,13 @@ def resolve_question(
         if span is None:
             return None  # one unlocatable quote discards the whole question
         spans.append(span)
+
+    # Multi-hop must actually hop: two or more spans from distinct passages.
+    # A single quote, or quotes from neighboring sentences, is factual in
+    # disguise and would inflate multi-hop retrieval scores — discard it and
+    # let the shortfall loop request a replacement.
+    if generated.qtype is QType.MULTIHOP and (len(spans) < 2 or not _spans_are_separated(spans)):
+        return None
 
     return Question(
         id=uuid.uuid4().hex,
@@ -245,7 +311,7 @@ def _build_prompt(documents: Sequence[ExamDocument], need: dict[QType, int]) -> 
 
 
 async def generate_exam(
-    client: GroqClient,
+    client: LLMClient,
     run_id: str,
     documents: Sequence[ExamDocument],
     n_questions: int,
@@ -275,7 +341,7 @@ async def generate_exam(
                 role=ModelRole.GENERATION,
                 system=_SYSTEM_PROMPT,
             )
-        except GroqJSONError:
+        except LLMJSONError:
             logger.warning(
                 "exam_round_invalid_json",
                 extra={"run_id": run_id, "round": round_index},

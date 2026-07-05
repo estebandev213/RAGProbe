@@ -17,6 +17,7 @@ import respx
 from app.config import get_settings
 from app.core.exam import DEMO_EXAM_SIZE, taxonomy_counts
 from app.core.indexing import EMBED_DIM
+from app.core.llm_client import LLMClient
 from app.core.runner import (
     TOP_K,
     answer_question,
@@ -297,6 +298,63 @@ async def test_execute_run_completes_and_emits_events(run_db: str) -> None:
     assert any(e.type is RunEventType.PHASE and e.phase is RunStatus.JUDGING for e in events)
 
 
+JUDGE_URL = "https://judge.example.test/v1/chat/completions"
+
+
+@respx.mock
+async def test_execute_run_routes_judging_to_independent_judge(run_db: str) -> None:
+    """With a judge client bound to a second provider, all grading traffic goes
+    there — the model that answers is not the model that grades."""
+    _seed_run(run_db)
+
+    def _answerer_handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        if "response_format" in body:  # exam generation (JSON mode)
+            return _completion({"questions": _make_questions(taxonomy_counts(DEMO_EXAM_SIZE))})
+        return _answer_response()
+
+    answer_route = respx.post(URL).mock(side_effect=_answerer_handler)
+    judge_route = respx.post(JUDGE_URL).mock(
+        return_value=_completion({"score": 1, "rationale": "ok", "confidence": "high"})
+    )
+
+    settings = RunSettings(demo_mode=True, n_questions=DEMO_EXAM_SIZE, top_k=TOP_K)
+    judge = LLMClient(
+        api_key="judge-key",
+        generation_model="judge-model",
+        fast_model="judge-model",
+        base_url="https://judge.example.test/v1",
+        jitter=lambda _a, _b: 0.0,
+    )
+    async with _client() as answerer, judge:
+        await execute_run(
+            "run1",
+            ["doc1"],
+            settings,
+            embed=_fake_embedder,
+            client=answerer,
+            judge_client=judge,
+        )
+
+    conn = connect(run_db)
+    try:
+        status = conn.execute("SELECT status FROM runs WHERE id = 'run1'").fetchone()[0]
+        n_grades = conn.execute("SELECT COUNT(*) FROM grades").fetchone()[0]
+    finally:
+        conn.close()
+
+    assert status == RunStatus.DONE.value
+    assert n_grades == 2 * DEMO_EXAM_SIZE
+    # The judge host actually graded, and the answer host never saw a
+    # judge-verdict-shaped request (its traffic is exam gen + answers only;
+    # only judge prompts embed the JudgeVerdict schema with its "rationale").
+    assert judge_route.called
+    assert answer_route.called
+    for call in answer_route.calls:
+        prompt = json.loads(call.request.content)["messages"][-1]["content"]
+        assert "rationale" not in prompt
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -311,6 +369,33 @@ def api(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[tuple[TestC
     client = TestClient(create_app())
     yield client, db_path
     get_settings.cache_clear()
+
+
+def test_create_run_returns_backend_resolved_counts(
+    api: tuple[TestClient, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The response carries n_questions/n_configs — the UI's single source of truth."""
+
+    async def _noop_run(*args: object, **kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr("app.routes.runs.execute_run", _noop_run)
+    client, db_path = api
+    conn = connect(db_path)
+    try:
+        conn.execute(
+            "INSERT INTO documents (id, name, mime, text, char_count, created_at) "
+            "VALUES ('doc1', 'd.md', 'text/markdown', 'hello', 5, '2026-06-13')"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    resp = client.post("/api/runs", json={"doc_ids": ["doc1"], "demo_mode": True})
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["n_questions"] == DEMO_EXAM_SIZE
+    assert body["n_configs"] == 2  # two chunk sizes x the demo strategy set
 
 
 def test_create_run_rejects_empty_doc_ids(api: tuple[TestClient, str]) -> None:

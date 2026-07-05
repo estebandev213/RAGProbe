@@ -1,5 +1,7 @@
 # RAGProbe
 
+![CI](https://github.com/estebandev213/ragprobe/actions/workflows/ci.yml/badge.svg)
+
 **Find out if your RAG pipeline is actually good.**
 
 RAGProbe automatically evaluates retrieval-augmented generation systems. Upload documents, define nothing — it generates a rigorous exam from your content, runs it against multiple competing configurations, grades every answer with an LLM judge, and delivers a report card telling you exactly which setup to use and where it still fails.
@@ -45,6 +47,10 @@ For every answerable question, the generator provides exact supporting quotes; t
 
 Retrieval hit is computed with span-overlap arithmetic: a gold span is _hit_ if any retrieved chunk covers ≥ 50% of its character range. This makes scores comparable across chunk sizes — a larger chunk that contains the same information doesn't score artificially higher just because it's wider. Multi-hop questions require _all_ gold spans to be hit for a full score, and partial credit (0.5) is given when some spans are recovered.
 
+Multi-hop questions are validated at generation time: a candidate whose supporting quotes resolve to a single passage (fewer than two spans, or spans close enough that one chunk would cover both) is discarded and regenerated — "multi-hop" that a single retrieval can satisfy is a factual question in disguise.
+
+Latency on the leaderboard measures only the successful LLM call itself — client-side rate limiting, queueing, and retry backoff are excluded, so the number reflects the provider and configuration, not the free-tier throttle.
+
 ### Composite score
 
 ```
@@ -57,9 +63,31 @@ Correctness is weighted highest because a correct answer with imperfect groundin
 
 Every grade stores the judge's rationale and confidence level (low / medium / high). Nothing is hidden. The failure explorer surfaces these fields on every row, and any grade can be overridden by a human with a single click — the system re-aggregates the leaderboard immediately. The correct answer to "why trust an LLM judge?" is not "the model is good." It is: make it visible, make it auditable, and let humans correct it.
 
+### An independent judge
+
+Set `GEMINI_API_KEY` and grading runs on **Gemini** — a different model _family_ from the Llama model that writes the answers. LLMs measurably favor their own outputs; cross-family judging removes that self-preference bias from the scores. The two providers run as separate clients with independent rate budgets, and each run records which models answered and judged it. Without a Gemini key, the tool still works — the answerer grades itself, and that limitation is stated rather than hidden.
+
 ### Unanswerable questions
 
 15% of the exam consists of plausible questions whose answers are not in the documents. A pipeline that answers these with fabricated information scores 0 on correctness regardless of how fluent the response sounds. A pipeline that says _"the provided context does not contain this information"_ scores 1. This is the hallucination resistance test.
+
+Abstention detection is strict: the refusal sentinel must constitute essentially the whole reply. An answer that abstains _and then answers anyway_ ("NOT_IN_DOCUMENTS. However, the answer is likely…") is graded as a real answer — hedged hallucinations don't get a free pass.
+
+### Statistical honesty
+
+Exam sizes are small by design (free-tier budgets), and per-question scores are coarse (0 / 0.5 / 1) — so small composite differences between configurations are noise, not verdicts. The recommendation states its sample size, and when the runner-up is within 0.05 composite it says so explicitly and calls the result a tie. Confidence intervals are on the roadmap; until then, the tool refuses to pretend more precision than it has.
+
+---
+
+## Limitations (read before trusting the numbers)
+
+Honest limits of the current design — each is a roadmap item, not a surprise:
+
+- **Without a Gemini key, the judge shares a model with the answerer.** Set `GEMINI_API_KEY` and this limitation disappears — grading moves to a different model family (see "An independent judge" above). In the zero-config fallback, the same LLM generates answers and grades them; the self-preference bias applies roughly uniformly across configurations, which protects the _ranking_ better than the absolute scores.
+- **Single judge sample, self-reported confidence.** Each grade is one judge call at temperature 0; the low/medium/high confidence is the judge's own claim, not a calibrated quantity. Agreement sampling across multiple judge calls is planned.
+- **Exam coverage is biased toward document heads.** Generation reads up to the first 12,000 characters of each document, so the tail of long documents goes untested.
+- **Documents are trusted input.** Document text flows into generation and judge prompts without sanitization; a document crafted to manipulate the judge could skew its own grades. Fine for evaluating your own corpus; do not point it at adversarial content.
+- **Every grade is auditable.** Rationale and confidence are stored on every grade, surfaced in the failure explorer, and human-overridable — the mitigations above are inspectable, not hidden.
 
 ---
 
@@ -90,18 +118,19 @@ A single Docker container serves the built React app as static files from FastAP
 
 ## Stack
 
-| Layer          | Choice                                                        |
-| -------------- | ------------------------------------------------------------- |
-| Backend        | Python 3.12, FastAPI, uvicorn                                 |
-| Validation     | pydantic v2, pydantic-settings                                |
-| Embeddings     | fastembed — `BAAI/bge-small-en-v1.5`, local ONNX, no API      |
-| Vector store   | sqlite-vec on SQLite                                          |
-| Keyword search | rank-bm25                                                     |
-| LLM            | Groq API (`llama-3.3-70b-versatile` for generation + judging) |
-| PDF parsing    | pypdf                                                         |
-| Tests          | pytest, pytest-asyncio, respx                                 |
-| Frontend       | Vite, React 18, TypeScript (strict), Tailwind, recharts       |
-| Deploy         | Docker → Railway                                              |
+| Layer          | Choice                                                                     |
+| -------------- | -------------------------------------------------------------------------- |
+| Backend        | Python 3.12, FastAPI, uvicorn                                              |
+| Validation     | pydantic v2, pydantic-settings                                             |
+| Embeddings     | fastembed — `BAAI/bge-small-en-v1.5`, local ONNX, no API                   |
+| Vector store   | sqlite-vec on SQLite                                                       |
+| Keyword search | rank-bm25                                                                  |
+| LLM (answers)  | Groq API — `llama-3.3-70b-versatile`                                       |
+| LLM (judge)    | Gemini (`gemini-3.5-flash`) when configured; independent from the answerer |
+| PDF parsing    | pypdf                                                                      |
+| Tests          | pytest, pytest-asyncio, respx                                              |
+| Frontend       | Vite, React 18, TypeScript (strict), Tailwind, recharts                    |
+| Deploy         | Docker → Railway                                                           |
 
 ---
 
@@ -112,11 +141,12 @@ A single Docker container serves the built React app as static files from FastAP
 - Python 3.12+
 - Node 20+
 - A [Groq API key](https://console.groq.com) (free tier)
+- Optional, recommended: a [Gemini API key](https://aistudio.google.com) (free tier) — enables the independent judge
 
 ### Local
 
 ```bash
-git clone https://github.com/your-username/ragprobe.git
+git clone https://github.com/estebandev213/ragprobe.git
 cd ragprobe
 
 # Backend
@@ -154,10 +184,10 @@ pre-commit run --all-files
 ```bash
 cp .env.example .env   # add your GROQ_API_KEY
 docker build -t ragprobe .
-docker run -p 8000:8000 --env-file .env ragprobe
+docker run -p 8000:8000 --env-file .env -v ragprobe-data:/app/data ragprobe
 ```
 
-Open [localhost:8000](http://localhost:8000).
+Open [localhost:8000](http://localhost:8000). The volume keeps uploaded documents and runs across container restarts; omit `-v` for a throwaway instance.
 
 ### Deploy to Railway
 
@@ -170,7 +200,7 @@ Open [localhost:8000](http://localhost:8000).
 
 ## Demo mode
 
-Toggle "Demo mode" on the upload screen (default: on). Demo mode runs 4 configurations and 12 questions instead of 6 × 20. This keeps the run under Groq's free-tier rate limits and completes in 2–3 minutes. Full mode runs all 6 configs and 20 questions; expect 5–8 minutes depending on your rate limit headroom.
+Toggle "Demo mode" on the upload screen (default: on). Demo mode runs a 5-question exam against 2 configurations — the two chunk sizes at the hybrid strategy (400/hybrid vs 800/hybrid) — isolating the chunk-size variable while staying inside Groq's free-tier token-per-minute limits. A demo run completes in a couple of minutes. Full mode runs the 20-question exam across all 6 configurations; expect several minutes depending on rate-limit headroom (the progress screen is designed for exactly this wait).
 
 ---
 
@@ -192,7 +222,7 @@ Toggle "Demo mode" on the upload screen (default: on). Demo mode runs 4 configur
 ragprobe/
 ├── backend/
 │   ├── app/
-│   │   ├── main.py
+│   │   ├── main.py          # app factory + SPA static serving
 │   │   ├── config.py
 │   │   ├── db.py
 │   │   ├── models.py
@@ -205,7 +235,9 @@ ragprobe/
 │       ├── api/
 │       ├── pages/           # Upload, RunProgress, Report
 │       └── components/
-├── Dockerfile
+├── .github/workflows/       # CI: ruff, mypy, pytest, tsc, build
+├── Dockerfile               # multi-stage: node build → python runtime
+├── render.yaml              # Render blueprint (fallback deploy)
 └── .env.example
 ```
 
@@ -213,13 +245,16 @@ ragprobe/
 
 ## Roadmap
 
+Ordered by how directly each item addresses a limitation above:
+
+- [x] Independent judge model (Gemini judges, Groq answers — set `GEMINI_API_KEY`)
+- [ ] Judge agreement sampling — 2–3 calls per grade; agreement rate replaces self-reported confidence
+- [ ] Bootstrap confidence intervals on the leaderboard
+- [ ] Exportable test suites and regression runs (compare before/after a prompt change)
+- [ ] Document-wide sampling for exam generation (beyond the head)
 - [ ] Custom configuration builder (arbitrary chunk sizes and top-k)
 - [ ] Reranking stage (cross-encoder between retrieval and generation)
-- [ ] Exportable test suites and regression runs (compare before/after a prompt change)
-- [ ] Multi-document corpus support
-- [ ] Judge calibration via agreement rate between multiple judge calls
 - [ ] Postgres + pgvector migration for multi-user deployments
-- [ ] CI pipeline with automated eval regression
 
 ---
 

@@ -105,7 +105,7 @@ Honest limits of the current design — each is a roadmap item, not a surprise:
 │  pdf / md / txt   chunker (offsets)     exam generator (Groq)     │
 │  normalize        fastembed (local)     config matrix executor    │
 │                   sqlite-vec            retrieve → answer (Groq)  │
-│                   BM25 index            judge (Groq) + span math  │
+│                   BM25 index            judge (Gemini) + span math│
 │                                         SSE event bus             │
 │                                                                   │
 │  Storage: single SQLite file (tables + sqlite-vec virtual tables) │
@@ -212,7 +212,7 @@ Toggle "Demo mode" on the upload screen (default: on). Demo mode runs a 5-questi
 
 **Reciprocal Rank Fusion over learned fusion.** RRF requires no training data, no hyperparameter tuning, and is robust to score distribution differences between vector similarity and BM25. For a tool that evaluates RAG rather than serving production traffic, interpretability beats marginal accuracy gains from learned methods.
 
-**Raw httpx over the OpenAI SDK.** Keeping the Groq client in-house means the rate limiter and retry logic are explicit, testable, and auditable. The OpenAI SDK would obscure backoff behavior that matters significantly on free-tier rate limits.
+**Raw httpx over vendor SDKs.** Keeping the LLM client in-house means the rate limiter and retry logic are explicit, testable, and auditable — and the same client drives both providers (Groq for answers, Gemini for judging) with independent rate budgets. A vendor SDK would obscure backoff behavior that matters significantly on free-tier rate limits.
 
 ---
 
@@ -228,7 +228,7 @@ ragprobe/
 │   │   ├── models.py
 │   │   ├── routes/          # documents, runs, reports
 │   │   └── core/            # ingestion, chunking, indexing, retrieval,
-│   │                        # groq_client, exam, runner, judge, scoring
+│   │                        # llm_client, exam, runner, judge, scoring
 │   └── tests/
 ├── frontend/
 │   └── src/

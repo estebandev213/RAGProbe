@@ -1,13 +1,19 @@
-import { FilePlus2 } from "lucide-react";
+import { FilePlus2, Plus } from "lucide-react";
 import { useRef, useState } from "react";
 
 interface DropzoneProps {
   onFiles: (files: File[]) => void;
   disabled?: boolean;
+  /** Slim inline variant shown once documents are already listed. */
+  compact?: boolean;
 }
 
 /** Drag-and-drop target plus a Browse button for picking pdf/md/txt files. */
-export function Dropzone({ onFiles, disabled = false }: DropzoneProps) {
+export function Dropzone({
+  onFiles,
+  disabled = false,
+  compact = false,
+}: DropzoneProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
 
@@ -15,18 +21,62 @@ export function Dropzone({ onFiles, disabled = false }: DropzoneProps) {
     if (list && list.length > 0) onFiles(Array.from(list));
   }
 
+  const dragHandlers = {
+    onDragOver: (event: React.DragEvent) => {
+      event.preventDefault();
+      if (!disabled) setDragging(true);
+    },
+    onDragLeave: () => setDragging(false),
+    onDrop: (event: React.DragEvent) => {
+      event.preventDefault();
+      setDragging(false);
+      if (!disabled) emit(event.dataTransfer.files);
+    },
+  };
+
+  const fileInput = (
+    <input
+      ref={inputRef}
+      type="file"
+      multiple
+      accept=".pdf,.md,.txt,text/markdown,text/plain,application/pdf"
+      className="hidden"
+      onChange={(event) => {
+        emit(event.target.files);
+        event.target.value = "";
+      }}
+    />
+  );
+
+  if (compact) {
+    return (
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => inputRef.current?.click()}
+        {...dragHandlers}
+        className={`group flex w-full items-center justify-center gap-2 rounded-xl border border-dashed px-4 py-3 text-sm font-medium transition ${
+          dragging
+            ? "border-accent bg-accent-soft/60"
+            : "border-slate-300 text-slate-500 hover:border-accent hover:bg-accent-soft/30 hover:text-accent dark:border-slate-600 dark:text-slate-400"
+        } ${disabled ? "cursor-not-allowed opacity-50" : ""}`}
+      >
+        <Plus
+          size={16}
+          className="text-accent transition group-hover:rotate-90"
+        />
+        Add more files
+        <span className="text-xs font-normal text-slate-400">
+          PDF · MD · TXT
+        </span>
+        {fileInput}
+      </button>
+    );
+  }
+
   return (
     <div
-      onDragOver={(event) => {
-        event.preventDefault();
-        if (!disabled) setDragging(true);
-      }}
-      onDragLeave={() => setDragging(false)}
-      onDrop={(event) => {
-        event.preventDefault();
-        setDragging(false);
-        if (!disabled) emit(event.dataTransfer.files);
-      }}
+      {...dragHandlers}
       className={`flex flex-col items-center rounded-2xl border-2 border-dashed px-6 py-12 text-center transition ${
         dragging
           ? "border-accent bg-accent-soft/60"
@@ -35,7 +85,7 @@ export function Dropzone({ onFiles, disabled = false }: DropzoneProps) {
     >
       <FilePlus2 className="text-accent" size={34} strokeWidth={1.6} />
       <p className="mt-4 font-display text-lg font-semibold text-slate-800 dark:text-slate-100">
-        Drag &amp; drop more files here
+        Drag &amp; drop files here
       </p>
       <p className="mt-1 text-sm text-slate-400">
         PDF, Markdown (.md) or Text (.txt)
@@ -50,17 +100,7 @@ export function Dropzone({ onFiles, disabled = false }: DropzoneProps) {
         Browse files
       </button>
 
-      <input
-        ref={inputRef}
-        type="file"
-        multiple
-        accept=".pdf,.md,.txt,text/markdown,text/plain,application/pdf"
-        className="hidden"
-        onChange={(event) => {
-          emit(event.target.files);
-          event.target.value = "";
-        }}
-      />
+      {fileInput}
     </div>
   );
 }

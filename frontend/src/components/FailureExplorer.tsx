@@ -230,6 +230,33 @@ function FailureCard({
   );
 }
 
+/** A styled filter dropdown: roomy padding, custom chevron, accent focus ring. */
+function FilterSelect({
+  value,
+  onChange,
+  children,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="relative">
+      <select
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        className="w-full cursor-pointer appearance-none rounded-xl border border-slate-300 bg-white py-2.5 pl-4 pr-10 text-sm font-medium text-slate-700 shadow-sm transition hover:border-accent/50 focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/25 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200 dark:hover:border-accent/60"
+      >
+        {children}
+      </select>
+      <ChevronDown
+        size={16}
+        className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-slate-400"
+      />
+    </div>
+  );
+}
+
 function Field({
   label,
   children,
@@ -350,23 +377,18 @@ export function FailureExplorer({
         <h2 className="font-display text-base font-semibold text-slate-800 dark:text-slate-100">
           Failure explorer
         </h2>
-        <div className="flex flex-wrap items-center gap-2 text-sm">
-          <select
-            value={configId}
-            onChange={(event) => setConfigId(event.target.value)}
-            className="rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-sm text-slate-700 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200"
-          >
+        <div className="flex flex-wrap items-center gap-3 text-sm">
+          <FilterSelect value={configId} onChange={setConfigId}>
             <option value="all">All configurations</option>
             {leaderboard.map((config) => (
               <option key={config.config_id} value={config.config_id}>
                 {config.label}
               </option>
             ))}
-          </select>
-          <select
+          </FilterSelect>
+          <FilterSelect
             value={qtype}
-            onChange={(event) => setQtype(event.target.value as QType | "all")}
-            className="rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-sm text-slate-700 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200"
+            onChange={(value) => setQtype(value as QType | "all")}
           >
             <option value="all">All question types</option>
             {QTYPE_ORDER.map((type) => (
@@ -374,13 +396,13 @@ export function FailureExplorer({
                 {QTYPE_LABEL[type]}
               </option>
             ))}
-          </select>
-          <label className="flex items-center gap-1.5 text-xs font-medium text-slate-500 dark:text-slate-400">
+          </FilterSelect>
+          <label className="flex cursor-pointer items-center gap-2 px-4 py-2.5 text-xs font-medium text-slate-500 transition hover:text-accent dark:text-slate-400 dark:hover:text-accent">
             <input
               type="checkbox"
               checked={onlyFailures}
               onChange={(event) => setOnlyFailures(event.target.checked)}
-              className="h-4 w-4 rounded border-slate-300 text-accent focus:ring-accent"
+              className="h-4 w-4 rounded border-slate-300 text-accent focus:ring-accent focus:ring-offset-0"
             />
             Only failures
           </label>

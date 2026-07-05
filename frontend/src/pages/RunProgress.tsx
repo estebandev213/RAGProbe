@@ -349,7 +349,13 @@ export function RunProgressPage() {
 
       <div className="mt-6 grid gap-3 sm:grid-cols-3">
         <StatCard
-          icon={<FileText size={18} />}
+          icon={
+            <FileText
+              size={28}
+              strokeWidth={1.75}
+              className="animate-float-soft motion-reduce:animate-none"
+            />
+          }
           label="Documents"
           value={
             docCount > 0
@@ -358,14 +364,26 @@ export function RunProgressPage() {
           }
         />
         <StatCard
-          icon={<FlaskConical size={18} />}
+          icon={
+            <FlaskConical
+              size={28}
+              strokeWidth={1.75}
+              className="animate-float-soft motion-reduce:animate-none [animation-delay:1.2s]"
+            />
+          }
           label="Exam"
           value={
             totalQuestions > 0 ? `${totalQuestions} questions · 4 types` : "—"
           }
         />
         <StatCard
-          icon={<Layers size={18} />}
+          icon={
+            <Layers
+              size={28}
+              strokeWidth={1.75}
+              className="animate-float-soft motion-reduce:animate-none [animation-delay:2.4s]"
+            />
+          }
           label="Configurations"
           value={configCount > 0 ? `${configCount} configurations` : "—"}
         />
@@ -397,8 +415,12 @@ export function RunProgressPage() {
         </div>
       ) : (
         <div className="card mt-6 flex items-center gap-3 p-5">
-          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-accent-soft text-accent">
-            <FlaskConical size={20} />
+          <div className="flex h-14 w-14 shrink-0 items-center justify-center text-accent">
+            <FlaskConical
+              size={30}
+              strokeWidth={1.75}
+              className="animate-float-soft motion-reduce:animate-none"
+            />
           </div>
           <div>
             <p className="font-semibold text-slate-800 dark:text-slate-100">

@@ -12,7 +12,7 @@ export function StatCard({
 }) {
   return (
     <div className="card flex items-center gap-3 px-4 py-3">
-      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-accent-soft text-accent">
+      <div className="flex h-14 w-14 shrink-0 items-center justify-center text-accent">
         {icon}
       </div>
       <div className="min-w-0">

@@ -1,4 +1,12 @@
-import { FileText, FlaskConical, PlayCircle } from "lucide-react";
+import {
+  Boxes,
+  ClipboardCheck,
+  FileText,
+  FlaskConical,
+  Gavel,
+  PlayCircle,
+  ScrollText,
+} from "lucide-react";
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
@@ -23,10 +31,10 @@ interface UploadedDoc {
 }
 
 const STEPS = [
-  "Generate an exam from your docs",
-  "Run against multiple RAG configs",
-  "Grade every answer with an LLM judge",
-  "Get a report with clear recommendations",
+  { icon: ScrollText, text: "Generate an exam from your docs" },
+  { icon: Boxes, text: "Run against multiple RAG configs" },
+  { icon: Gavel, text: "Grade every answer with an LLM judge" },
+  { icon: ClipboardCheck, text: "Get a report with clear recommendations" },
 ];
 
 export function UploadPage() {
@@ -137,7 +145,8 @@ export function UploadPage() {
             Evaluate your RAG pipelines
           </p>
           <h1 className="mt-3 font-display text-4xl font-bold leading-tight tracking-tight text-slate-900 dark:text-white sm:text-5xl">
-            Upload documents and run an evaluation
+            Upload documents <br className="hidden md:block" />
+            and run an evaluation
           </h1>
           <p className="mt-4 max-w-xl text-slate-500 dark:text-slate-400">
             RAGProbe will generate an exam from your documents, run it against
@@ -147,8 +156,12 @@ export function UploadPage() {
 
         <div className="flex flex-col gap-4">
           <div className="card flex items-start gap-4 p-5">
-            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-accent-soft text-accent">
-              <FlaskConical size={22} />
+            <div className="flex h-14 w-14 shrink-0 items-center justify-center text-accent">
+              <FlaskConical
+                size={32}
+                strokeWidth={1.75}
+                className="animate-float-soft motion-reduce:animate-none"
+              />
             </div>
             <div className="flex-1">
               <p className="font-semibold text-slate-800 dark:text-slate-100">
@@ -193,13 +206,10 @@ export function UploadPage() {
         </p>
 
         <div className="card mt-4 p-5">
-          <Dropzone
-            onFiles={ingest}
-            disabled={busy || docs.length >= MAX_FILES}
-          />
-
-          {docs.length > 0 && (
-            <div className="mt-4 flex flex-col gap-3">
+          {docs.length === 0 ? (
+            <Dropzone onFiles={ingest} disabled={busy} />
+          ) : (
+            <div className="flex flex-col gap-3">
               {docs.map((doc) => (
                 <DocumentRow
                   key={doc.summary.id}
@@ -208,6 +218,9 @@ export function UploadPage() {
                   onRemove={remove}
                 />
               ))}
+              {docs.length < MAX_FILES && (
+                <Dropzone compact onFiles={ingest} disabled={busy} />
+              )}
             </div>
           )}
         </div>
@@ -222,48 +235,65 @@ export function UploadPage() {
         )}
       </div>
 
-      <div className="mt-8 grid gap-8 lg:grid-cols-2">
-        <div className="flex items-start gap-3">
-          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-accent-soft text-accent">
-            <FileText size={20} />
-          </div>
-          <div>
-            <p className="font-semibold text-slate-800 dark:text-slate-100">
-              Use sample documents
-            </p>
-            <p className="mt-0.5 max-w-xs text-sm text-slate-500 dark:text-slate-400">
-              Load our sample docs to try RAGProbe in seconds. No setup
-              required.
-            </p>
-          </div>
-          <button
-            type="button"
-            disabled={busy}
-            onClick={useSamples}
-            className="ml-auto shrink-0 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200"
-          >
-            Use sample documents
-          </button>
-        </div>
+      <div className="mt-8">
+        <p className="font-semibold text-slate-800 dark:text-slate-100">
+          What happens next?
+        </p>
+        <ol className="mt-6 flex flex-col gap-8 md:flex-row md:gap-6">
+          {STEPS.map((step, index) => {
+            const Icon = step.icon;
+            return (
+              <li
+                key={step.text}
+                className="relative flex flex-1 items-start gap-4 md:flex-col md:items-center md:text-center"
+              >
+                {index < STEPS.length - 1 && (
+                  <span
+                    aria-hidden
+                    className="absolute -bottom-8 left-7 top-16 w-0.5 bg-gradient-to-b from-accent/40 to-accent/10 md:bottom-auto md:left-1/2 md:right-[-50%] md:top-7 md:h-0.5 md:w-auto md:bg-gradient-to-r"
+                  />
+                )}
+                <span className="relative z-10 flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-accent-soft text-accent ring-1 ring-accent/20 dark:bg-accent/15 dark:text-slate-300">
+                  <Icon size={26} />
+                </span>
+                <div className="md:mt-1 md:max-w-[11rem]">
+                  <p className="font-mono text-[11px] font-semibold uppercase tracking-wider text-accent">
+                    Step {index + 1}
+                  </p>
+                  <p className="mt-0.5 text-sm text-slate-600 dark:text-slate-300">
+                    {step.text}
+                  </p>
+                </div>
+              </li>
+            );
+          })}
+        </ol>
+      </div>
 
+      <div className="mt-16 flex items-start gap-3">
+        <div className="flex h-14 w-14 shrink-0 items-center justify-center text-accent">
+          <FileText
+            size={30}
+            strokeWidth={1.75}
+            className="animate-float-soft motion-reduce:animate-none [animation-delay:1.2s]"
+          />
+        </div>
         <div>
           <p className="font-semibold text-slate-800 dark:text-slate-100">
-            What happens next?
+            Use sample documents
           </p>
-          <ol className="mt-3 grid gap-2 sm:grid-cols-2">
-            {STEPS.map((step, index) => (
-              <li
-                key={step}
-                className="flex items-start gap-2 text-sm text-slate-500 dark:text-slate-400"
-              >
-                <span className="mt-0.5 font-mono text-xs font-semibold text-accent">
-                  {index + 1}
-                </span>
-                {step}
-              </li>
-            ))}
-          </ol>
+          <p className="mt-0.5 max-w-xs text-sm text-slate-500 dark:text-slate-400">
+            Load our sample docs to try RAGProbe in seconds. No setup required.
+          </p>
         </div>
+        <button
+          type="button"
+          disabled={busy}
+          onClick={useSamples}
+          className="ml-auto shrink-0 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200"
+        >
+          Use sample documents
+        </button>
       </div>
     </div>
   );

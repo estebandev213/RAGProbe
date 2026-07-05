@@ -37,7 +37,6 @@ function Highlight({
 }) {
   return (
     <div className="card group relative flex items-center justify-between gap-4 overflow-hidden px-5 py-7 transition hover:-translate-y-0.5 hover:shadow-lg">
-      <div className="absolute inset-x-0 top-0 h-0.5 bg-accent/25 transition group-hover:bg-accent/60" />
       <div className="min-w-0">
         <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
           {label}
@@ -47,7 +46,7 @@ function Highlight({
         </p>
         <p className="truncate text-xs text-slate-400">{caption}</p>
       </div>
-      <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl bg-accent-soft text-accent ring-1 ring-accent/15 transition group-hover:ring-accent/30">
+      <div className="flex h-16 w-16 shrink-0 items-center justify-center text-accent">
         {icon}
       </div>
     </div>
@@ -217,53 +216,75 @@ export function ReportPage() {
         </div>
       </div>
 
-      <RecommendationBanner
-        winner={winner}
-        leaderboard={leaderboard}
-        recommendation={report.recommendation}
-      />
+      <div className="mt-6 grid gap-6 xl:grid-cols-2">
+        <RecommendationBanner
+          winner={winner}
+          recommendation={report.recommendation}
+        />
+
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Highlight
+            icon={
+              <Target
+                size={38}
+                strokeWidth={1.75}
+                className="animate-float-soft motion-reduce:animate-none"
+              />
+            }
+            label="Highest correctness"
+            value={formatScore(bestCorrectness?.correctness ?? null)}
+            caption={bestCorrectness?.label ?? "—"}
+          />
+          <Highlight
+            icon={
+              <Search
+                size={38}
+                strokeWidth={1.75}
+                className="animate-float-soft motion-reduce:animate-none [animation-delay:1.2s]"
+              />
+            }
+            label="Best retrieval"
+            value={formatScore(bestRetrieval?.retrieval_hit ?? null)}
+            caption={bestRetrieval?.label ?? "—"}
+          />
+          <Highlight
+            icon={
+              <Zap
+                size={38}
+                strokeWidth={1.75}
+                className="animate-float-soft motion-reduce:animate-none [animation-delay:2.4s]"
+              />
+            }
+            label="Lowest latency"
+            value={fastest ? formatLatency(fastest.mean_latency_ms) : "—"}
+            caption={fastest?.label ?? "—"}
+          />
+          <a
+            href="#failures"
+            className="card group relative flex items-center justify-between gap-4 overflow-hidden bg-accent-soft/60 px-5 py-7 transition hover:-translate-y-0.5 hover:bg-accent-soft hover:shadow-lg dark:bg-accent/10 dark:hover:bg-accent/20"
+          >
+            <div className="min-w-0">
+              <p className="font-display text-lg font-semibold text-slate-800 dark:text-slate-100">
+                Inspect failures
+              </p>
+              <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+                Explore where each configuration succeeded and failed.
+              </p>
+            </div>
+            <div className="flex h-16 w-16 shrink-0 items-center justify-center text-accent">
+              <ListChecks
+                size={38}
+                strokeWidth={1.75}
+                className="animate-float-soft motion-reduce:animate-none [animation-delay:3.6s]"
+              />
+            </div>
+          </a>
+        </div>
+      </div>
 
       <div className="mt-6 grid gap-6 xl:grid-cols-2">
         <Leaderboard rows={leaderboard} />
         <ScoreBreakdownChart breakdown={breakdown} />
-      </div>
-
-      <div className="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <Highlight
-          icon={<Target size={20} />}
-          label="Highest correctness"
-          value={formatScore(bestCorrectness?.correctness ?? null)}
-          caption={bestCorrectness?.label ?? "—"}
-        />
-        <Highlight
-          icon={<Search size={20} />}
-          label="Best retrieval"
-          value={formatScore(bestRetrieval?.retrieval_hit ?? null)}
-          caption={bestRetrieval?.label ?? "—"}
-        />
-        <Highlight
-          icon={<Zap size={20} />}
-          label="Lowest latency"
-          value={fastest ? formatLatency(fastest.mean_latency_ms) : "—"}
-          caption={fastest?.label ?? "—"}
-        />
-        <a
-          href="#failures"
-          className="card group relative flex items-center justify-between gap-4 overflow-hidden bg-accent-soft/60 px-5 py-7 transition hover:-translate-y-0.5 hover:bg-accent-soft hover:shadow-lg dark:bg-accent/10 dark:hover:bg-accent/20"
-        >
-          <div className="absolute inset-x-0 top-0 h-0.5 bg-accent/25 transition group-hover:bg-accent/60" />
-          <div className="min-w-0">
-            <p className="font-display text-lg font-semibold text-slate-800 dark:text-slate-100">
-              Inspect failures
-            </p>
-            <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
-              Explore where each configuration succeeded and failed.
-            </p>
-          </div>
-          <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl bg-white text-accent ring-1 ring-accent/15 transition group-hover:ring-accent/30 dark:bg-slate-900">
-            <ListChecks size={20} />
-          </div>
-        </a>
       </div>
 
       <FailureExplorer

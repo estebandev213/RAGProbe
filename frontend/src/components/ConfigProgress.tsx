@@ -97,17 +97,20 @@ export function ConfigProgressList({
 }) {
   return (
     <div className="card p-5">
-      <div className="flex items-center justify-between">
-        <h2 className="font-display text-base font-semibold text-slate-800 dark:text-slate-100">
-          Configurations progress
-        </h2>
-        <div className="flex gap-8 text-xs font-medium uppercase tracking-wide text-slate-400">
-          <span>Progress</span>
-          <span>Questions</span>
-        </div>
+      <h2 className="font-display text-base font-semibold text-slate-800 dark:text-slate-100">
+        Configurations progress
+      </h2>
+
+      {/* Column headers mirror the ConfigRow grid so labels sit above their columns. */}
+      <div className="mt-3 flex items-center gap-4 text-xs font-medium uppercase tracking-wide text-slate-400">
+        <div className="w-9 shrink-0" aria-hidden />
+        <span className="w-44 shrink-0">Configuration</span>
+        <span className="flex-1">Progress</span>
+        <span className="w-24 shrink-0 text-right">Questions</span>
+        <span className="w-[18px] shrink-0" aria-hidden />
       </div>
 
-      <div className="mt-2 divide-y divide-slate-100 dark:divide-slate-800">
+      <div className="mt-1 divide-y divide-slate-100 dark:divide-slate-800">
         {configs.length === 0 ? (
           <p className="py-6 text-center text-sm text-slate-400">
             Waiting for the answering phase to begin…

@@ -266,19 +266,26 @@ export function RunProgressPage() {
   }, [status, phaseEntry, elapsed]);
 
   const connection = error
-    ? { dot: "bg-red-500", title: "Disconnected", note: error }
+    ? { dot: "bg-red-500", title: "Disconnected", note: error, live: false }
     : terminal
-      ? { dot: "bg-emerald-500", title: "Completed", note: "Run finished" }
+      ? {
+          dot: "bg-emerald-500",
+          title: "Completed",
+          note: "Run finished",
+          live: false,
+        }
       : connected
         ? {
             dot: "bg-emerald-500",
             title: "SSE Active",
             note: "Receiving live updates",
+            live: true,
           }
         : {
             dot: "bg-amber-500",
             title: "Connecting…",
             note: "Opening the event stream",
+            live: true,
           };
 
   return (
@@ -319,24 +326,39 @@ export function RunProgressPage() {
         </div>
 
         <div className="flex flex-wrap gap-3">
-          <div className="card flex items-center gap-3 px-4 py-3">
-            <Timer size={18} className="text-accent" />
+          <div className="card flex min-w-[190px] items-center gap-3.5 px-4 py-3">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-accent-soft text-accent dark:bg-accent/10">
+              <Timer size={18} />
+            </div>
             <div>
-              <p className="text-xs text-slate-400">Elapsed time</p>
-              <p className="font-mono text-lg font-semibold text-slate-800 dark:text-slate-100">
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                Elapsed time
+              </p>
+              <p className="font-mono text-xl font-semibold leading-tight tabular-nums text-slate-800 dark:text-slate-100">
                 {formatElapsed(elapsed)}
               </p>
               <p className="text-xs text-slate-400">Started {startedLabel}</p>
             </div>
           </div>
-          <div className="card flex items-start gap-3 px-4 py-3">
-            <Wifi size={18} className="mt-0.5 text-accent" />
-            <div>
-              <p className="flex items-center gap-1.5 text-xs text-slate-400">
-                <span className={`h-2 w-2 rounded-full ${connection.dot}`} />{" "}
+          <div className="card flex min-w-[190px] items-center gap-3.5 px-4 py-3">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-accent-soft text-accent dark:bg-accent/10">
+              <Wifi size={18} />
+            </div>
+            <div className="min-w-0">
+              <p className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                <span className="relative flex h-2 w-2">
+                  {connection.live && (
+                    <span
+                      className={`absolute inline-flex h-full w-full animate-ping rounded-full opacity-75 motion-reduce:hidden ${connection.dot}`}
+                    />
+                  )}
+                  <span
+                    className={`relative inline-flex h-2 w-2 rounded-full ${connection.dot}`}
+                  />
+                </span>
                 Connection
               </p>
-              <p className="font-semibold text-slate-800 dark:text-slate-100">
+              <p className="font-semibold leading-tight text-slate-800 dark:text-slate-100">
                 {connection.title}
               </p>
               <p className="max-w-[180px] truncate text-xs text-slate-400">
@@ -346,6 +368,43 @@ export function RunProgressPage() {
           </div>
         </div>
       </div>
+
+      {error ? (
+        <div
+          role="alert"
+          className="mt-6 flex items-start gap-3 rounded-xl border border-red-200 bg-red-50 p-4 dark:border-red-900/50 dark:bg-red-950/40"
+        >
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-red-100 text-red-600 dark:bg-red-900/50">
+            <FlaskConical size={20} />
+          </div>
+          <div>
+            <p className="font-semibold text-red-700 dark:text-red-300">
+              Run failed
+            </p>
+            <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
+          </div>
+        </div>
+      ) : (
+        <div className="card mt-6 flex items-center gap-3 p-5">
+          <div className="flex h-14 w-14 shrink-0 items-center justify-center text-accent">
+            <FlaskConical
+              size={30}
+              strokeWidth={1.75}
+              className="animate-float-soft motion-reduce:animate-none"
+            />
+          </div>
+          <div>
+            <p className="font-semibold text-slate-800 dark:text-slate-100">
+              {terminal ? "Evaluation complete" : "Evaluation in progress"}
+            </p>
+            <p className="text-sm text-slate-500 dark:text-slate-400">
+              {terminal
+                ? "Opening the report card…"
+                : "RAGProbe is running each configuration against every question. You'll be taken to the report when it finishes."}
+            </p>
+          </div>
+        </div>
+      )}
 
       <div className="mt-6 grid gap-3 sm:grid-cols-3">
         <StatCard
@@ -397,43 +456,6 @@ export function RunProgressPage() {
         <ConfigProgressList configs={configs} totalQuestions={totalQuestions} />
         <EventLog entries={log} onClear={() => setLog([])} />
       </div>
-
-      {error ? (
-        <div
-          role="alert"
-          className="mt-6 flex items-start gap-3 rounded-xl border border-red-200 bg-red-50 p-4 dark:border-red-900/50 dark:bg-red-950/40"
-        >
-          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-red-100 text-red-600 dark:bg-red-900/50">
-            <FlaskConical size={20} />
-          </div>
-          <div>
-            <p className="font-semibold text-red-700 dark:text-red-300">
-              Run failed
-            </p>
-            <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
-          </div>
-        </div>
-      ) : (
-        <div className="card mt-6 flex items-center gap-3 p-5">
-          <div className="flex h-14 w-14 shrink-0 items-center justify-center text-accent">
-            <FlaskConical
-              size={30}
-              strokeWidth={1.75}
-              className="animate-float-soft motion-reduce:animate-none"
-            />
-          </div>
-          <div>
-            <p className="font-semibold text-slate-800 dark:text-slate-100">
-              {terminal ? "Evaluation complete" : "Evaluation in progress"}
-            </p>
-            <p className="text-sm text-slate-500 dark:text-slate-400">
-              {terminal
-                ? "Opening the report card…"
-                : "RAGProbe is running each configuration against every question. You'll be taken to the report when it finishes."}
-            </p>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

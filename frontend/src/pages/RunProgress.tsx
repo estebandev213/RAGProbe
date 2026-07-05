@@ -225,7 +225,7 @@ export function RunProgressPage() {
     return navState.demoMode === false
       ? 20
       : navState.demoMode === true
-        ? 12
+        ? 5
         : 0;
   }, [configs, navState.demoMode]);
 
@@ -235,7 +235,7 @@ export function RunProgressPage() {
       : navState.demoMode === false
         ? 6
         : navState.demoMode === true
-          ? 4
+          ? 2
           : 0;
 
   const docCount = navState.documents?.length ?? 0;

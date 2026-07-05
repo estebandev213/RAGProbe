@@ -127,10 +127,10 @@ def test_taxonomy_counts_default_sizes() -> None:
         QType.UNANSWERABLE: 3,
     }
     assert taxonomy_counts(DEMO_EXAM_SIZE) == {
-        QType.FACTUAL: 5,
-        QType.MULTIHOP: 3,
-        QType.PARAPHRASE: 2,
-        QType.UNANSWERABLE: 2,
+        QType.FACTUAL: 2,
+        QType.MULTIHOP: 1,
+        QType.PARAPHRASE: 1,
+        QType.UNANSWERABLE: 1,
     }
 
 

@@ -45,7 +45,7 @@ CHAT_PATH = "/chat/completions"
 
 MAX_ATTEMPTS = 5  # retries cap (§6.6)
 MAX_CONCURRENCY = 4  # asyncio.Semaphore size (§6.6)
-RATE_PER_MIN = 25  # token-bucket target (§6.6); free-tier safety
+RATE_PER_MIN = 15  # token-bucket target (§6.6); conservative for free-tier TPM
 BASE_DELAY = 0.5  # first retry backoff, seconds
 MAX_DELAY = 8.0  # backoff ceiling, seconds
 

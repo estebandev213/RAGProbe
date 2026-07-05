@@ -151,7 +151,7 @@ export function UploadPage() {
               </p>
               <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
                 {demoMode
-                  ? "Limits the evaluation to 12 questions and 4 configurations to respect rate limits on free tiers."
+                  ? "Limits the evaluation to 5 questions and 2 configurations (400/hybrid vs 800/hybrid) to respect rate limits on free tiers."
                   : "Runs the full 20-question exam across all 6 configurations."}
               </p>
             </div>

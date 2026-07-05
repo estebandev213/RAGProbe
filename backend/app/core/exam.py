@@ -42,7 +42,7 @@ logger = logging.getLogger("ragprobe")
 
 # Default exam sizes (§6.3): smaller in demo mode for free-tier rate limits.
 EXAM_SIZE = 20
-DEMO_EXAM_SIZE = 12
+DEMO_EXAM_SIZE = 5
 
 # Taxonomy mix (§6.3). Order matters only for deterministic remainder handling.
 TAXONOMY: tuple[tuple[QType, float], ...] = (

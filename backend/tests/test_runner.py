@@ -80,11 +80,13 @@ def test_config_matrix_full_has_six_configs() -> None:
     assert {c.label for c in configs} >= {"400/vector", "800/hybrid", "400/bm25"}
 
 
-def test_config_matrix_demo_has_four_configs() -> None:
+def test_config_matrix_demo_has_two_hybrid_configs() -> None:
     configs = build_config_matrix("run1", demo_mode=True)
-    assert len(configs) == 4
+    assert len(configs) == 2
     assert all(c.strategy in strategies_for(True) for c in configs)
-    assert "bm25" not in {c.strategy for c in configs}
+    # Demo holds strategy fixed at hybrid, varying only chunk size.
+    assert {c.strategy for c in configs} == {"hybrid"}
+    assert {c.label for c in configs} == {"400/hybrid", "800/hybrid"}
 
 
 # ---------------------------------------------------------------------------
@@ -280,9 +282,9 @@ async def test_execute_run_completes_and_emits_events(run_db: str) -> None:
         conn.close()
 
     assert status == RunStatus.DONE.value
-    assert n_configs == 4
+    assert n_configs == 2
     assert n_questions == DEMO_EXAM_SIZE
-    assert n_answers == 4 * DEMO_EXAM_SIZE  # every config x question answered
+    assert n_answers == 2 * DEMO_EXAM_SIZE  # every config x question answered
     assert n_grades == n_answers  # and every answer graded
 
     types = {event.type for event in events}

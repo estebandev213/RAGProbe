@@ -49,10 +49,11 @@ logger = logging.getLogger("ragprobe")
 # Retrieval depth, fixed for the v1 matrix (§6.2).
 TOP_K = 5
 
-# Strategy sets per mode (§6.2): demo drops the bm25-only config to halve the
-# matrix (4 configs vs 6) and stay inside free-tier rate limits.
+# Strategy sets per mode (§6.2): demo keeps only hybrid, so its matrix is the two
+# chunk sizes at a fixed strategy (2 configs vs 6) — isolating chunk size while
+# halving the LLM-call volume to stay well inside free-tier rate limits.
 FULL_STRATEGIES: tuple[str, ...] = ("vector", "bm25", "hybrid")
-DEMO_STRATEGIES: tuple[str, ...] = ("vector", "hybrid")
+DEMO_STRATEGIES: tuple[str, ...] = ("hybrid",)
 
 # Strict-grounding system prompt for answer generation (§6.4): the model must
 # abstain rather than draw on parametric knowledge, so abstention is measurable.

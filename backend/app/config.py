@@ -1,9 +1,11 @@
 """Application configuration via pydantic-settings.
 
-Settings are read from environment variables first, then from a ``.env`` file
-at the repository root (so the app works whether ``uvicorn`` is launched from
-the repo root or from ``backend/``). A missing required variable — notably
-``GROQ_API_KEY`` — fails fast with a clear, actionable message at startup.
+Settings are read from environment variables first, then from ``.env`` /
+``.env.local`` files at the repository root (so the app works whether
+``uvicorn`` is launched from the repo root or from ``backend/``). ``.env.local``
+is a git-ignored local override that wins over ``.env`` — use it for personal
+credentials without touching the shared ``.env``. A missing required variable —
+notably ``GROQ_API_KEY`` — fails fast with a clear, actionable message at startup.
 """
 
 from __future__ import annotations
@@ -14,7 +16,8 @@ from pydantic import Field, ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Checked in order; values found later win, real environment variables always win.
-DEFAULT_ENV_FILES: tuple[str, ...] = (".env", "../.env")
+# The ``.env.local`` files come last so a local override beats the shared ``.env``.
+DEFAULT_ENV_FILES: tuple[str, ...] = (".env", "../.env", ".env.local", "../.env.local")
 
 
 class ConfigError(RuntimeError):

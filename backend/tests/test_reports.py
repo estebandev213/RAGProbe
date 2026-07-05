@@ -165,6 +165,34 @@ def test_recommend_empty_leaderboard() -> None:
     assert sentence == "No graded answers yet."
 
 
+def test_recommend_states_sample_size() -> None:
+    rows = [
+        _graded(
+            "cfg", "400/hybrid", QType.FACTUAL, correctness=1.0, faithfulness=1.0, retrieval_hit=1.0
+        ),
+        _graded(
+            "cfg", "400/hybrid", QType.FACTUAL, correctness=1.0, faithfulness=1.0, retrieval_hit=1.0
+        ),
+    ]
+    _label, sentence = recommend(build_leaderboard(rows))
+    assert "over 2 answers" in sentence
+
+
+def test_recommend_flags_near_ties() -> None:
+    # Two configs with identical composites: the margin is inside the noise
+    # floor, so the recommendation must say "tie" rather than crown a winner.
+    rows = [
+        _graded(
+            "a", "400/hybrid", QType.FACTUAL, correctness=1.0, faithfulness=1.0, retrieval_hit=1.0
+        ),
+        _graded(
+            "b", "800/hybrid", QType.FACTUAL, correctness=1.0, faithfulness=1.0, retrieval_hit=1.0
+        ),
+    ]
+    _label, sentence = recommend(build_leaderboard(rows))
+    assert "tied" in sentence
+
+
 # ---------------------------------------------------------------------------
 # Endpoints (seeded DB)
 # ---------------------------------------------------------------------------

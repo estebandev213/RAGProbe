@@ -23,8 +23,9 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 
 from app.config import get_settings
+from app.core.chunking import CHUNK_SIZES
 from app.core.exam import exam_size
-from app.core.runner import TOP_K, execute_run
+from app.core.runner import TOP_K, execute_run, strategies_for
 from app.db import get_connection
 from app.events import bus
 from app.models import (
@@ -43,6 +44,11 @@ router = APIRouter(tags=["runs"])
 
 # Statuses past which no further events will be published (§6.7).
 _TERMINAL = (RunStatus.DONE, RunStatus.ERROR)
+
+# Seconds of stream silence before an SSE comment frame is sent. Long quiet
+# phases (indexing, throttled answering) otherwise emit nothing for minutes,
+# and reverse proxies in real deployments buffer or kill idle streams.
+_HEARTBEAT_SECONDS = 15.0
 
 # Strong references to in-flight run tasks so the event loop does not garbage
 # collect them mid-run; a done-callback drops each when it completes.
@@ -76,11 +82,20 @@ async def create_run(
     if missing:
         raise HTTPException(status_code=404, detail=f"Unknown document id(s): {', '.join(missing)}")
 
-    demo_mode = body.demo_mode if body.demo_mode is not None else get_settings().demo_mode
+    app_settings = get_settings()
+    demo_mode = body.demo_mode if body.demo_mode is not None else app_settings.demo_mode
     settings = RunSettings(
         demo_mode=demo_mode,
         n_questions=exam_size(demo_mode),
         top_k=TOP_K,
+        answer_model=app_settings.groq_generation_model,
+        # Which model will grade: the independent Gemini judge when its key is
+        # configured, otherwise the answerer grades itself (recorded honestly).
+        judge_model=(
+            app_settings.gemini_judge_model
+            if app_settings.gemini_api_key
+            else app_settings.groq_generation_model
+        ),
     )
 
     run_id = uuid.uuid4().hex
@@ -98,7 +113,11 @@ async def create_run(
 
     _spawn_run(run_id, body.doc_ids, settings)
     logger.info("run_created", extra={"run_id": run_id, "demo_mode": demo_mode})
-    return RunCreated(run_id=run_id)
+    return RunCreated(
+        run_id=run_id,
+        n_questions=settings.n_questions,
+        n_configs=len(CHUNK_SIZES) * len(strategies_for(demo_mode)),
+    )
 
 
 def _row_to_status(row: sqlite3.Row) -> RunStatusResponse:
@@ -160,7 +179,13 @@ async def stream_events(
         queue = bus.subscribe(run_id)
         try:
             while True:
-                event = await queue.get()
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=_HEARTBEAT_SECONDS)
+                except TimeoutError:
+                    # SSE comment frame: ignored by EventSource, but keeps the
+                    # connection visibly alive through proxies.
+                    yield ": keepalive\n\n"
+                    continue
                 if event is None:  # end-of-stream sentinel
                     return
                 yield _sse(event)

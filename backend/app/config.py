@@ -41,6 +41,23 @@ class Settings(BaseSettings):
     database_path: str = "./data/ragprobe.db"
     groq_generation_model: str = "llama-3.3-70b-versatile"
     groq_fast_model: str = "llama-3.1-8b-instant"
+    # Request-rate budget for the answering provider (Groq free tier).
+    llm_rate_per_min: int = 15
+
+    # Independent judge (optional but recommended): when GEMINI_API_KEY is set,
+    # grading runs on Gemini — a different model *family* from the answerer,
+    # removing self-preference bias from the scores. Left empty, judging falls
+    # back to the answer client (documented limitation).
+    gemini_api_key: str = ""
+    gemini_judge_model: str = "gemini-3.5-flash"
+    gemini_base_url: str = "https://generativelanguage.googleapis.com/v1beta/openai"
+    # Gemini free tier allows ~10 requests/min; stay under it.
+    judge_rate_per_min: int = 8
+
+    # Directory holding the built SPA (Vite dist). When it exists, the API also
+    # serves the frontend — the single-container deployment story. Absent in
+    # development, where Vite serves the frontend itself.
+    static_dir: str = "./static"
 
     # Application version surfaced by /api/health. Not read from the environment
     # in practice, but overridable for tests/deploys.

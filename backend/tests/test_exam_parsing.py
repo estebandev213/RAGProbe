@@ -24,7 +24,7 @@ from app.core.exam import (
     resolve_question,
     taxonomy_counts,
 )
-from app.core.groq_client import GroqClient
+from app.core.llm_client import LLMClient
 from app.db import connect, run_migrations
 from app.models import NOT_IN_DOCUMENTS, GeneratedQuestion, QType
 
@@ -47,8 +47,8 @@ def document() -> ExamDocument:
     return ExamDocument(doc_id="doc1", name="meridian-overview.md", text=FIXTURE.read_text())
 
 
-def _client() -> GroqClient:
-    return GroqClient(
+def _client() -> LLMClient:
+    return LLMClient(
         api_key="test-key",
         generation_model=GEN_MODEL,
         fast_model=FAST_MODEL,
@@ -160,6 +160,29 @@ def test_locate_quote_missing(document: ExamDocument) -> None:
     assert locate_quote("this phrase is absent from the document", document.text) is None
 
 
+def test_repeated_quote_records_alternate_occurrences() -> None:
+    # The same sentence appears twice; the primary span is the first occurrence
+    # and the second is recorded as an alternate, so retrieval of either copy
+    # scores as a hit (no false miss on repeated text).
+    quote = "The failover window is thirty seconds."
+    filler = "Unrelated prose about deployment topology. " * 10
+    doc = ExamDocument(doc_id="dup", name="dup.md", text=f"{quote} {filler}{quote} More text.")
+    generated = GeneratedQuestion(
+        qtype=QType.FACTUAL,
+        question="How long is the failover window?",
+        gold_answer="Thirty seconds",
+        supporting_quotes=[quote],
+    )
+    question = resolve_question("run1", generated, [doc])
+    assert question is not None
+    span = question.gold_spans[0]
+    assert len(span.alternates) == 1
+    assert doc.text[span.start_char : span.end_char] == quote
+    alt = span.alternates[0]
+    assert doc.text[alt.start_char : alt.end_char] == quote
+    assert alt.start_char > span.start_char
+
+
 # ---------------------------------------------------------------------------
 # resolve_question
 # ---------------------------------------------------------------------------
@@ -212,6 +235,42 @@ def test_resolve_discards_inconsistent_unanswerable(document: ExamDocument) -> N
         supporting_quotes=[QUOTES[0]],
     )
     assert resolve_question("run1", generated, [document]) is None
+
+
+def test_resolve_discards_single_quote_multihop(document: ExamDocument) -> None:
+    # "Multi-hop" with one supporting passage is factual in disguise.
+    generated = GeneratedQuestion(
+        qtype=QType.MULTIHOP,
+        question="one hop only",
+        gold_answer="x",
+        supporting_quotes=[QUOTES[0]],
+    )
+    assert resolve_question("run1", generated, [document]) is None
+
+
+def test_resolve_discards_adjacent_span_multihop(document: ExamDocument) -> None:
+    # QUOTES[1] and QUOTES[2] sit ~165 chars apart in the fixture — one chunk
+    # would cover both, so this is not a genuine multi-hop question.
+    generated = GeneratedQuestion(
+        qtype=QType.MULTIHOP,
+        question="adjacent passages",
+        gold_answer="x",
+        supporting_quotes=[QUOTES[1], QUOTES[2]],
+    )
+    assert resolve_question("run1", generated, [document]) is None
+
+
+def test_resolve_accepts_separated_multihop(document: ExamDocument) -> None:
+    # QUOTES[0] and QUOTES[1] are ~970 chars apart — distinct passages.
+    generated = GeneratedQuestion(
+        qtype=QType.MULTIHOP,
+        question="real multi-hop",
+        gold_answer="x",
+        supporting_quotes=[QUOTES[0], QUOTES[1]],
+    )
+    question = resolve_question("run1", generated, [document])
+    assert question is not None
+    assert len(question.gold_spans) == 2
 
 
 # ---------------------------------------------------------------------------

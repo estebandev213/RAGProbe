@@ -1,17 +1,21 @@
-"""Async Groq client: rate limiting, retries, and a JSON-mode helper (§6.6).
+"""Async, provider-agnostic LLM client: rate limiting, retries, JSON mode (§6.6).
 
 This module is load-bearing — every LLM call in RAGProbe (exam generation,
-answer generation, the correctness/faithfulness judges) goes through one
-:class:`GroqClient`. Groq's free tier is rate-limited, so the client:
+answer generation, the correctness/faithfulness judges) goes through an
+:class:`LLMClient`. It speaks the OpenAI-compatible ``/chat/completions``
+protocol, so one implementation serves any conforming provider — Groq for
+answering, Gemini for judging — each instance with its own credentials, model
+IDs, and rate budget. Free tiers are rate-limited, so the client:
 
 * caps in-flight concurrency with an ``asyncio.Semaphore`` and throttles the
-  request *rate* with an async token bucket (~25 requests/min);
+  request *rate* with an async token bucket (per-instance ``rate_per_min``);
 * retries 429 / 5xx responses with exponential backoff + jitter, honoring a
-  ``retry-after`` header when present, up to :data:`MAX_ATTEMPTS` attempts;
-* exposes :meth:`GroqClient.json_mode`, which requests a JSON object, strips
+  ``retry-after`` header when present, up to :data:`MAX_ATTEMPTS` attempts —
+  consuming a bucket token per attempt so retries stay throttled too;
+* exposes :meth:`LLMClient.json_mode`, which requests a JSON object, strips
   code fences, validates against a pydantic schema, and makes one repair
   attempt before giving up;
-* emits a structured log line per call (model, latency, tokens, attempt).
+* emits a structured log line per call (host, model, latency, tokens, attempt).
 
 The clock (``monotonic``/``sleep``) and ``jitter`` source are injectable so
 tests run instantly and deterministically without real waits or network — the
@@ -38,14 +42,14 @@ from app.config import Settings
 
 logger = logging.getLogger("ragprobe")
 
-# Groq's OpenAI-compatible endpoint (§3). The constructor accepts a base_url
+# OpenAI-compatible endpoints (§3). The constructor accepts a base_url
 # override so tests can point respx at a predictable host.
 GROQ_BASE_URL = "https://api.groq.com/openai/v1"
 CHAT_PATH = "/chat/completions"
 
 MAX_ATTEMPTS = 5  # retries cap (§6.6)
 MAX_CONCURRENCY = 4  # asyncio.Semaphore size (§6.6)
-RATE_PER_MIN = 15  # token-bucket target (§6.6); conservative for free-tier TPM
+DEFAULT_RATE_PER_MIN = 15.0  # token-bucket default (§6.6); free-tier safe
 BASE_DELAY = 0.5  # first retry backoff, seconds
 MAX_DELAY = 8.0  # backoff ceiling, seconds
 
@@ -60,7 +64,7 @@ T = TypeVar("T", bound=BaseModel)
 
 
 class ModelRole(StrEnum):
-    """Logical model roles mapped to concrete Groq IDs at call time.
+    """Logical model roles mapped to concrete model IDs at call time.
 
     Call sites name the *role* (``GENERATION`` / ``FAST``); the client resolves
     it to the configured model ID, so the IDs live in one place (settings).
@@ -79,21 +83,42 @@ class ChatMessage(BaseModel):
 
 @dataclass(frozen=True)
 class ChatResult:
-    """The outcome of a successful chat completion."""
+    """The outcome of a successful chat completion.
+
+    ``latency_ms`` is the wall time of the *successful HTTP attempt only* —
+    it excludes semaphore waits, token-bucket throttling, and failed-attempt
+    backoff, so it measures the provider, not this client's rate limiting.
+    """
 
     text: str
     model: str
     prompt_tokens: int
     completion_tokens: int
     attempts: int
+    latency_ms: int = 0
 
 
-class GroqError(RuntimeError):
+@dataclass(frozen=True)
+class TokenUsage:
+    """Token counts accumulated across one or more chat calls."""
+
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+
+    def add(self, result: ChatResult) -> TokenUsage:
+        """Return this usage plus one chat result's token counts."""
+        return TokenUsage(
+            prompt_tokens=self.prompt_tokens + result.prompt_tokens,
+            completion_tokens=self.completion_tokens + result.completion_tokens,
+        )
+
+
+class LLMError(RuntimeError):
     """Raised when a request fails non-retryably or exhausts its retries."""
 
 
-class GroqJSONError(GroqError):
-    """Raised when :meth:`GroqClient.json_mode` cannot parse valid JSON.
+class LLMJSONError(LLMError):
+    """Raised when :meth:`LLMClient.json_mode` cannot parse valid JSON.
 
     Carries the last raw model output (``raw``) to aid debugging upstream.
     """
@@ -104,8 +129,8 @@ class GroqJSONError(GroqError):
 
 
 # ---------------------------------------------------------------------------
-# Internal models mirroring Groq's response shape (keeps mypy strict — no Any
-# leaks from response.json()).
+# Internal models mirroring the OpenAI-compatible response shape (keeps mypy
+# strict — no Any leaks from response.json()).
 # ---------------------------------------------------------------------------
 
 
@@ -223,8 +248,13 @@ class TokenBucket:
 # ---------------------------------------------------------------------------
 
 
-class GroqClient:
-    """Async, rate-limited, retrying client for Groq chat completions."""
+class LLMClient:
+    """Async, rate-limited, retrying client for OpenAI-compatible chat APIs.
+
+    Provider-agnostic: each instance binds its own base URL, credentials,
+    model IDs, and request-rate budget, so the answering provider (Groq) and
+    the judging provider (Gemini) run as two independently throttled clients.
+    """
 
     def __init__(
         self,
@@ -234,6 +264,7 @@ class GroqClient:
         fast_model: str,
         http_client: httpx.AsyncClient | None = None,
         base_url: str = GROQ_BASE_URL,
+        rate_per_min: float = DEFAULT_RATE_PER_MIN,
         sleep: Sleeper = asyncio.sleep,
         monotonic: Monotonic = time.monotonic,
         jitter: Jitter = random.uniform,
@@ -248,24 +279,18 @@ class GroqClient:
             "Content-Type": "application/json",
         }
         self._http = http_client or httpx.AsyncClient(base_url=base_url, timeout=60.0)
+        # Host recorded per structured log line, so answerer vs judge traffic
+        # is distinguishable in a run's logs.
+        self._host = httpx.URL(base_url).host or "unknown"
         self._semaphore = asyncio.Semaphore(MAX_CONCURRENCY)
         self._bucket = TokenBucket(
-            RATE_PER_MIN / 60.0,
+            rate_per_min / 60.0,
             float(MAX_CONCURRENCY),
             monotonic=monotonic,
             sleep=sleep,
         )
 
-    @classmethod
-    def from_settings(cls, settings: Settings) -> GroqClient:
-        """Build a client from application settings."""
-        return cls(
-            api_key=settings.groq_api_key,
-            generation_model=settings.groq_generation_model,
-            fast_model=settings.groq_fast_model,
-        )
-
-    async def __aenter__(self) -> GroqClient:
+    async def __aenter__(self) -> LLMClient:
         return self
 
     async def __aexit__(self, *exc: object) -> None:
@@ -274,6 +299,11 @@ class GroqClient:
     async def aclose(self) -> None:
         """Close the underlying HTTP client."""
         await self._http.aclose()
+
+    @property
+    def host(self) -> str:
+        """The provider host this client talks to (for logs and diagnostics)."""
+        return self._host
 
     def _model_id(self, role: ModelRole) -> str:
         return self._generation_model if role is ModelRole.GENERATION else self._fast_model
@@ -289,7 +319,7 @@ class GroqClient:
         """Run one chat completion, rate-limited and retried.
 
         Retries 429 / 5xx with backoff (honoring ``retry-after``); raises
-        :class:`GroqError` on other 4xx or once :data:`MAX_ATTEMPTS` is reached.
+        :class:`LLMError` on other 4xx or once :data:`MAX_ATTEMPTS` is reached.
         """
         model_id = self._model_id(role)
         body: dict[str, Any] = {
@@ -301,8 +331,11 @@ class GroqClient:
             body["response_format"] = {"type": "json_object"}
 
         async with self._semaphore:
-            await self._bucket.acquire()
             for attempt in range(1, MAX_ATTEMPTS + 1):
+                # One bucket token per HTTP attempt (not per logical call), so
+                # retries after a 429 are throttled too instead of bypassing the
+                # rate limit exactly when the API is telling us to slow down.
+                await self._bucket.acquire()
                 started = self._monotonic()
                 response = await self._http.post(CHAT_PATH, json=body, headers=self._headers)
                 latency_ms = int((self._monotonic() - started) * 1000)
@@ -312,8 +345,9 @@ class GroqClient:
                     completion = _Completion.model_validate(response.json())
                     text = completion.choices[0].message.content if completion.choices else ""
                     logger.info(
-                        "groq_call",
+                        "llm_call",
                         extra={
+                            "host": self._host,
                             "model": model_id,
                             "latency_ms": latency_ms,
                             "prompt_tokens": completion.usage.prompt_tokens,
@@ -328,12 +362,14 @@ class GroqClient:
                         prompt_tokens=completion.usage.prompt_tokens,
                         completion_tokens=completion.usage.completion_tokens,
                         attempts=attempt,
+                        latency_ms=latency_ms,
                     )
 
                 retryable = status == 429 or status >= 500
                 logger.warning(
-                    "groq_call_retry" if retryable else "groq_call_error",
+                    "llm_call_retry" if retryable else "llm_call_error",
                     extra={
+                        "host": self._host,
                         "model": model_id,
                         "status": status,
                         "attempt": attempt,
@@ -341,7 +377,9 @@ class GroqClient:
                     },
                 )
                 if not retryable:
-                    raise GroqError(f"Groq request failed with status {status}: {response.text}")
+                    raise LLMError(
+                        f"LLM request to {self._host} failed with status {status}: {response.text}"
+                    )
                 if attempt < MAX_ATTEMPTS:
                     delay = _backoff_seconds(
                         attempt, _parse_retry_after(response.headers), jitter=self._jitter
@@ -349,7 +387,7 @@ class GroqClient:
                     await self._sleep(delay)
 
         # Reached only if every attempt was a retryable failure.
-        raise GroqError(f"Groq request failed after {MAX_ATTEMPTS} attempts.")
+        raise LLMError(f"LLM request to {self._host} failed after {MAX_ATTEMPTS} attempts.")
 
     async def json_mode(
         self,
@@ -363,7 +401,23 @@ class GroqClient:
 
         Sends ``prompt`` plus the schema in JSON mode, strips any code fences,
         and validates. On failure makes exactly one repair attempt before
-        raising :class:`GroqJSONError`.
+        raising :class:`LLMJSONError`.
+        """
+        parsed, _usage = await self.json_mode_with_usage(prompt, schema, role=role, system=system)
+        return parsed
+
+    async def json_mode_with_usage(
+        self,
+        prompt: str,
+        schema: type[T],
+        *,
+        role: ModelRole,
+        system: str | None = None,
+    ) -> tuple[T, TokenUsage]:
+        """Like :meth:`json_mode`, additionally returning the tokens consumed.
+
+        The usage sums the initial call and the repair call (if one was needed)
+        so callers can account for the true cost of a validated object.
         """
         schema_json = json.dumps(schema.model_json_schema())
         instruction = (
@@ -377,8 +431,9 @@ class GroqClient:
         messages.append(ChatMessage(role="user", content=instruction))
 
         result = await self.chat(messages, role=role, json_object=True)
+        usage = TokenUsage().add(result)
         try:
-            return schema.model_validate_json(strip_code_fences(result.text))
+            return schema.model_validate_json(strip_code_fences(result.text)), usage
         except ValidationError:
             pass  # fall through to one repair attempt
 
@@ -394,10 +449,48 @@ class GroqClient:
             ),
         ]
         repaired = await self.chat(repair_messages, role=role, json_object=True)
+        usage = usage.add(repaired)
         try:
-            return schema.model_validate_json(strip_code_fences(repaired.text))
+            return schema.model_validate_json(strip_code_fences(repaired.text)), usage
         except ValidationError as exc:
-            raise GroqJSONError(
-                f"Groq returned invalid JSON for {schema.__name__} after one repair attempt.",
+            raise LLMJSONError(
+                f"{self._host} returned invalid JSON for {schema.__name__} "
+                "after one repair attempt.",
                 raw=repaired.text,
             ) from exc
+
+
+# ---------------------------------------------------------------------------
+# Client factories: one per role. The answerer and the judge are separate
+# providers with separate rate budgets — and, when a Gemini key is configured,
+# separate model families, which is what makes the judge independent (§6.5).
+# ---------------------------------------------------------------------------
+
+
+def answer_client_from_settings(settings: Settings) -> LLMClient:
+    """The client used for exam generation and answer generation (Groq)."""
+    return LLMClient(
+        api_key=settings.groq_api_key,
+        generation_model=settings.groq_generation_model,
+        fast_model=settings.groq_fast_model,
+        rate_per_min=float(settings.llm_rate_per_min),
+    )
+
+
+def judge_client_from_settings(settings: Settings) -> LLMClient | None:
+    """An *independent* judge client, or ``None`` when no Gemini key is set.
+
+    ``None`` means the caller falls back to grading with the answer client —
+    the zero-config behavior, honestly documented as a limitation (the model
+    grades its own work). One env var (``GEMINI_API_KEY``) upgrades every run
+    to cross-family judging.
+    """
+    if not settings.gemini_api_key:
+        return None
+    return LLMClient(
+        api_key=settings.gemini_api_key,
+        generation_model=settings.gemini_judge_model,
+        fast_model=settings.gemini_judge_model,
+        base_url=settings.gemini_base_url,
+        rate_per_min=float(settings.judge_rate_per_min),
+    )

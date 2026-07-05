@@ -88,6 +88,14 @@ class GeneratedExam(BaseModel):
     questions: list[GeneratedQuestion]
 
 
+class SpanRange(BaseModel):
+    """A plain char range into one document's text."""
+
+    doc_id: str
+    start_char: int
+    end_char: int
+
+
 class GoldSpan(BaseModel):
     """A located supporting passage as a char range into a document's text.
 
@@ -95,11 +103,17 @@ class GoldSpan(BaseModel):
     whitespace/case normalization used during fuzzy location). Span-overlap
     retrieval scoring (§6.5) compares these ranges against retrieved chunks'
     ranges, which is what makes retrieval comparable across chunk sizes.
+
+    ``alternates`` lists *other occurrences of the same quote* anywhere in the
+    corpus: repeated text (headers, boilerplate) means a retriever may surface
+    a different-but-identical passage, and that must count as a hit rather than
+    a false miss. Rows stored before this field existed parse with the default.
     """
 
     doc_id: str
     start_char: int
     end_char: int
+    alternates: list[SpanRange] = Field(default_factory=list)
 
 
 class Question(BaseModel):
@@ -146,12 +160,16 @@ class RunSettings(BaseModel):
 
     ``demo_mode`` shrinks both the exam and the config matrix to fit free-tier
     rate limits; ``n_questions`` and ``top_k`` are resolved from it at run
-    creation so the run is reproducible from its stored settings alone.
+    creation so the run is reproducible from its stored settings alone. The
+    model IDs record *which* models produced and graded the run's numbers —
+    without them a stored run is unauditable later.
     """
 
     demo_mode: bool
     n_questions: int
     top_k: int
+    answer_model: str = ""
+    judge_model: str = ""
 
 
 class RunCreate(BaseModel):
@@ -166,9 +184,16 @@ class RunCreate(BaseModel):
 
 
 class RunCreated(BaseModel):
-    """Response body for ``POST /api/runs``: the id of the started run."""
+    """Response body for ``POST /api/runs``.
+
+    Carries the resolved run shape (``n_questions`` x ``n_configs``) so the UI
+    renders the numbers the backend actually decided on — the backend is the
+    single source of truth for exam and matrix sizing.
+    """
 
     run_id: str
+    n_questions: int
+    n_configs: int
 
 
 class RunStatusResponse(BaseModel):
@@ -267,6 +292,8 @@ class Grade(BaseModel):
     ``retrieval_hit`` is ``None`` for unanswerable questions, which are excluded
     from that metric (§6.5). The composite is computed on read from these three
     fields, so an override re-aggregates without any stored value to refresh.
+    The ``judge_*_tokens`` fields record what the grading itself cost —
+    deterministic (abstention) verdicts cost zero.
     """
 
     id: str
@@ -277,6 +304,8 @@ class Grade(BaseModel):
     judge_rationale: str
     judge_confidence: JudgeConfidence
     overridden: bool
+    judge_prompt_tokens: int = 0
+    judge_completion_tokens: int = 0
 
 
 class GradeOverride(BaseModel):

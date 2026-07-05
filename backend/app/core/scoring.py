@@ -32,6 +32,7 @@ from app.models import (
     QType,
     QTypeScore,
     Question,
+    SpanRange,
 )
 
 # Fraction of a gold span a chunk must cover to count as a hit (§6.5).
@@ -42,13 +43,20 @@ W_CORRECTNESS = 0.5
 W_FAITHFULNESS = 0.3
 W_RETRIEVAL = 0.2
 
+# Composite margin below which two configs are statistically indistinguishable
+# at exam-sized n. With coarse {0, 0.5, 1} per-question scores and ~20 answers
+# per config, a few hundredths of composite is noise, not a verdict — the
+# recommendation says so instead of crowning a winner on it.
+TIE_MARGIN = 0.05
 
-def span_overlap_ratio(span: GoldSpan, chunk: ScoredChunk) -> float:
+
+def span_overlap_ratio(span: GoldSpan | SpanRange, chunk: ScoredChunk) -> float:
     """Fraction of ``span`` covered by ``chunk`` (0.0 if a different document).
 
     Both ranges are half-open ``[start_char, end_char)`` offsets into the same
     document text, so the overlap is the intersection length over the span
-    length.
+    length. Accepts a primary :class:`GoldSpan` or one of its alternate
+    :class:`SpanRange` occurrences — only the range fields are read.
     """
     if chunk.document_id != span.doc_id:
         return 0.0
@@ -62,8 +70,18 @@ def span_overlap_ratio(span: GoldSpan, chunk: ScoredChunk) -> float:
 
 
 def span_is_hit(span: GoldSpan, chunks: Sequence[ScoredChunk]) -> bool:
-    """Whether any retrieved chunk covers at least :data:`MIN_OVERLAP` of ``span``."""
-    return any(span_overlap_ratio(span, chunk) >= MIN_OVERLAP for chunk in chunks)
+    """Whether retrieval covered ≥ :data:`MIN_OVERLAP` of *any occurrence* of the quote.
+
+    The gold quote may appear at several places in the corpus (``alternates``);
+    a retriever that surfaced any identical occurrence found the evidence, so
+    every occurrence is checked — repeated text must not cause false misses.
+    """
+    occurrences: list[GoldSpan | SpanRange] = [span, *span.alternates]
+    return any(
+        span_overlap_ratio(occurrence, chunk) >= MIN_OVERLAP
+        for occurrence in occurrences
+        for chunk in chunks
+    )
 
 
 def retrieval_hit_for_question(question: Question, chunks: Sequence[ScoredChunk]) -> float | None:
@@ -212,13 +230,24 @@ def build_breakdown(rows: Sequence[GradedAnswer], order: Sequence[str]) -> list[
 def recommend(leaderboard: Sequence[ConfigScore]) -> tuple[str | None, str]:
     """The winning config's label and a one-line recommendation (§8).
 
-    Returns ``(None, "...")`` when there is nothing graded yet.
+    Returns ``(None, "...")`` when there is nothing graded yet. The sentence
+    states the sample size, and when the runner-up is within :data:`TIE_MARGIN`
+    it says so — a margin inside the noise floor is a tie, not a verdict.
     """
     if not leaderboard:
         return None, "No graded answers yet."
     winner = leaderboard[0]
     latency_s = winner.mean_latency_ms / 1000.0
-    return (
-        winner.label,
-        f"Use {winner.label} — best composite {winner.composite:.2f}, {latency_s:.1f}s avg.",
+    sentence = (
+        f"Use {winner.label} — best composite {winner.composite:.2f} "
+        f"over {winner.n_answers} answers, {latency_s:.1f}s avg."
     )
+    if len(leaderboard) > 1:
+        runner_up = leaderboard[1]
+        margin = winner.composite - runner_up.composite
+        if margin < TIE_MARGIN:
+            sentence += (
+                f" Margin over {runner_up.label} is only {margin:.2f} — "
+                "treat these as tied at this sample size."
+            )
+    return winner.label, sentence

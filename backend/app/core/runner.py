@@ -27,12 +27,13 @@ from itertools import product
 
 from app.config import get_settings
 from app.core.chunking import CHUNK_SIZES
-from app.core.exam import ExamDocument, generate_exam, insert_questions
+from app.core.exam import ExamDocument, generate_exam, generate_title, insert_questions
 from app.core.indexing import Embedder, embed_texts, index_document
 from app.core.judge import grade_answer, insert_grade
 from app.core.llm_client import (
     ChatMessage,
     LLMClient,
+    LLMError,
     ModelRole,
     answer_client_from_settings,
     judge_client_from_settings,
@@ -271,6 +272,17 @@ async def execute_run(
             documents = _load_documents(conn, doc_ids)
             if not documents:
                 raise ValueError("Run has no resolvable documents to evaluate.")
+
+            # Name the run from its documents so History shows a recognizable
+            # title (§8). Best-effort: a title failure must never fail the run —
+            # the list endpoint falls back to the document names.
+            try:
+                title = await generate_title(answerer, documents)
+                if title:
+                    conn.execute("UPDATE runs SET title = ? WHERE id = ?", (title, run_id))
+                    conn.commit()
+            except LLMError:
+                logger.warning("title_generation_failed", extra={"run_id": run_id})
 
             _enter_phase(conn, run_id, RunStatus.GENERATING_EXAM)
             questions = await generate_exam(answerer, run_id, documents, settings.n_questions)

@@ -14,6 +14,7 @@ import type {
   RunCreated,
   RunEvent,
   RunStatusResponse,
+  RunSummary,
 } from "../types";
 
 /** An error carrying the backend's `{detail, code}` envelope when present. */
@@ -97,6 +98,11 @@ export async function createRun(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ doc_ids: docIds, demo_mode: demoMode }),
   });
+}
+
+/** List every run for the history screen, newest first. */
+export async function listRuns(): Promise<RunSummary[]> {
+  return request<RunSummary[]>("/runs");
 }
 
 /** Fetch a run's current status snapshot. */

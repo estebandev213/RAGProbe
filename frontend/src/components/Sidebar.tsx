@@ -38,8 +38,8 @@ export function Sidebar() {
     {
       label: "History",
       icon: FileText,
-      to: null,
-      active: false,
+      to: "/history",
+      active: pathname === "/history",
     },
   ];
 
@@ -76,18 +76,11 @@ export function Sidebar() {
         })}
       </nav>
 
-      <div className="mt-auto flex flex-col gap-4">
-        <div className="rounded-xl border border-slate-200/70 bg-white/50 px-3 py-3 dark:border-slate-700/50 dark:bg-slate-900/40">
-          <div className="flex items-center gap-2 text-sm font-medium text-slate-700 dark:text-slate-200">
-            <span className="h-2 w-2 animate-pulse rounded-full bg-emerald-500" />
-            SSE Connected
-          </div>
-          <p className="mt-0.5 text-xs text-slate-400">Live updates enabled</p>
-        </div>
-        <div className="flex items-center justify-between px-1">
-          <ThemeToggle />
-          <span className="font-mono text-xs text-slate-400">v0.1.0</span>
-        </div>
+      <div className="mt-auto flex items-center justify-between px-1">
+        <ThemeToggle />
+        <span className="font-mono text-xs text-slate-400">
+          v{__APP_VERSION__}
+        </span>
       </div>
     </aside>
   );

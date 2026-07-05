@@ -37,6 +37,7 @@ from app.models import (
     GoldSpan,
     QType,
     Question,
+    RunTitle,
     SpanRange,
 )
 
@@ -308,6 +309,48 @@ def _build_prompt(documents: Sequence[ExamDocument], need: dict[QType, int]) -> 
         "they can be located in the source text. Each quote must be a contiguous "
         "substring of a single document."
     )
+
+
+# Enough of each document's head to name its subject — a title needs far less
+# context than exam generation (§8).
+TITLE_SAMPLE_CHARS = 1500
+# Keep a title short enough to render on one line of a history card.
+TITLE_MAX_CHARS = 80
+
+_TITLE_SYSTEM_PROMPT = (
+    "You name document sets. Given some source documents, you reply with a short, "
+    "specific title capturing their subject so a user can recognize them later. "
+    "Respond with JSON only."
+)
+
+
+async def generate_title(client: LLMClient, documents: Sequence[ExamDocument]) -> str:
+    """Generate a short, recognizable title for a run's documents (§8).
+
+    Uses the cheap FAST model and a small head sample of each document. Propagates
+    the usual :class:`LLMError` subclasses on failure — the caller falls back to the
+    document names rather than failing the run. May return "" if the model produces
+    nothing usable; the caller treats that as "no title".
+    """
+    docs_block = "\n\n".join(
+        f"[DOCUMENT {i + 1}: {doc.name}]\n{doc.text[:TITLE_SAMPLE_CHARS]}"
+        for i, doc in enumerate(documents)
+    )
+    prompt = (
+        f"Source documents:\n\n{docs_block}\n\n"
+        "Write a concise 3-8 word title in Title Case naming the subject matter of "
+        "these documents, so a user can recognize this evaluation in a list later. "
+        "Prefer the real topic over the file names. Do not use quotation marks and do "
+        "not include words like 'evaluation', 'documents', 'dataset', or 'RAG'."
+    )
+    result = await client.json_mode(
+        prompt,
+        RunTitle,
+        role=ModelRole.FAST,
+        system=_TITLE_SYSTEM_PROMPT,
+    )
+    title = _WHITESPACE.sub(" ", result.title).strip().strip("\"'").strip()
+    return title[:TITLE_MAX_CHARS].strip()
 
 
 async def generate_exam(

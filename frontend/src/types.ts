@@ -37,6 +37,21 @@ export interface RunStatusResponse {
   created_at: string;
 }
 
+/** One run in the history list (`GET /api/runs`), newest first. */
+export interface RunSummary {
+  id: string;
+  status: RunStatus;
+  created_at: string;
+  error: string | null;
+  /** AI-generated name, falling back to the joined document names. */
+  title: string;
+  document_names: string[];
+  demo_mode: boolean;
+  n_documents: number;
+  n_questions: number;
+  n_configs: number;
+}
+
 /** The kinds of event the run orchestrator publishes over SSE (§6.7). */
 export type RunEventType =
   | "phase"

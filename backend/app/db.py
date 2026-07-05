@@ -138,6 +138,13 @@ _MIGRATIONS: tuple[str, ...] = (
     ALTER TABLE grades ADD COLUMN judge_prompt_tokens INTEGER NOT NULL DEFAULT 0;
     ALTER TABLE grades ADD COLUMN judge_completion_tokens INTEGER NOT NULL DEFAULT 0;
     """,
+    # A short, AI-generated title so the History screen shows a recognizable name
+    # instead of a bare timestamp (§8). Nullable: the orchestrator fills it early in
+    # the run; existing rows and any generation failure fall back to the document
+    # names, resolved by the runs list endpoint.
+    """
+    ALTER TABLE runs ADD COLUMN title TEXT;
+    """,
 )
 
 

@@ -88,6 +88,12 @@ class GeneratedExam(BaseModel):
     questions: list[GeneratedQuestion]
 
 
+class RunTitle(BaseModel):
+    """The fast model's JSON-mode output: a short, recognizable run title (§8)."""
+
+    title: str
+
+
 class SpanRange(BaseModel):
     """A plain char range into one document's text."""
 
@@ -203,6 +209,26 @@ class RunStatusResponse(BaseModel):
     status: RunStatus
     error: str | None
     created_at: str
+
+
+class RunSummary(BaseModel):
+    """One run as shown in the history list (``GET /api/runs``), newest first.
+
+    ``title`` is the AI-generated name (falling back to the joined document names),
+    and ``document_names`` feeds the card's source chips. The counts are the run's
+    *shape*, read straight off the stored ``doc_ids`` and ``settings``.
+    """
+
+    id: str
+    status: RunStatus
+    created_at: str
+    error: str | None
+    title: str
+    document_names: list[str]
+    demo_mode: bool
+    n_documents: int
+    n_questions: int
+    n_configs: int
 
 
 class ConfigSummary(BaseModel):

@@ -36,6 +36,7 @@ from app.models import (
     RunSettings,
     RunStatus,
     RunStatusResponse,
+    RunSummary,
 )
 
 logger = logging.getLogger("ragprobe")
@@ -118,6 +119,54 @@ async def create_run(
         n_questions=settings.n_questions,
         n_configs=len(CHUNK_SIZES) * len(strategies_for(demo_mode)),
     )
+
+
+def _row_to_summary(row: sqlite3.Row, name_by_id: dict[str, str]) -> RunSummary:
+    """Map a runs row to a history-list summary, resolving its document names.
+
+    ``title`` falls back to the joined document names (then a generic label) when
+    the AI title hasn't landed yet or generation failed, so a card is never blank.
+    """
+    settings = RunSettings.model_validate_json(row["settings"])
+    doc_ids = json.loads(row["doc_ids"])
+    names = [name_by_id[doc_id] for doc_id in doc_ids if doc_id in name_by_id]
+    title = row["title"] or ", ".join(names) or "Untitled evaluation"
+    return RunSummary(
+        id=row["id"],
+        status=RunStatus(row["status"]),
+        created_at=row["created_at"],
+        error=row["error"],
+        title=title,
+        document_names=names,
+        demo_mode=settings.demo_mode,
+        n_documents=len(doc_ids),
+        n_questions=settings.n_questions,
+        n_configs=len(CHUNK_SIZES) * len(strategies_for(settings.demo_mode)),
+    )
+
+
+@router.get("/runs", response_model=list[RunSummary])
+async def list_runs(
+    conn: Annotated[sqlite3.Connection, Depends(get_connection)],
+) -> list[RunSummary]:
+    """List runs for the history screen, newest first."""
+    rows = conn.execute(
+        "SELECT id, status, error, created_at, doc_ids, settings, title FROM runs "
+        "ORDER BY created_at DESC"
+    ).fetchall()
+    # Resolve every run's document names for the source chips in one query (§8).
+    all_ids = {doc_id for row in rows for doc_id in json.loads(row["doc_ids"])}
+    name_by_id: dict[str, str] = {}
+    if all_ids:
+        placeholders = ",".join("?" for _ in all_ids)
+        name_by_id = {
+            doc["id"]: doc["name"]
+            for doc in conn.execute(
+                f"SELECT id, name FROM documents WHERE id IN ({placeholders})",
+                list(all_ids),
+            ).fetchall()
+        }
+    return [_row_to_summary(row, name_by_id) for row in rows]
 
 
 def _row_to_status(row: sqlite3.Row) -> RunStatusResponse:

@@ -106,13 +106,18 @@ export function UploadPage() {
     setBusy(true);
     try {
       const summaries = docs.map((doc) => doc.summary);
-      const { run_id } = await createRun(
+      const { run_id, n_questions, n_configs } = await createRun(
         summaries.map((summary) => summary.id),
         demoMode,
       );
       setLastRunId(run_id);
       navigate(`/runs/${run_id}`, {
-        state: { documents: summaries, demoMode },
+        state: {
+          documents: summaries,
+          demoMode,
+          nQuestions: n_questions,
+          nConfigs: n_configs,
+        },
       });
     } catch (err) {
       setError(
@@ -151,8 +156,8 @@ export function UploadPage() {
               </p>
               <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
                 {demoMode
-                  ? "Limits the evaluation to 5 questions and 2 configurations (400/hybrid vs 800/hybrid) to respect rate limits on free tiers."
-                  : "Runs the full 20-question exam across all 6 configurations."}
+                  ? "Runs a reduced exam over a smaller configuration matrix so the evaluation fits free-tier rate limits. Exact counts are shown when the run starts."
+                  : "Runs the full exam across the complete configuration matrix (every chunk size × every retrieval strategy)."}
               </p>
             </div>
             <Switch

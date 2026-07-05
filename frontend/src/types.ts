@@ -25,6 +25,9 @@ export type RunStatus =
 
 export interface RunCreated {
   run_id: string;
+  /** Backend-resolved run shape — the single source of truth for counts. */
+  n_questions: number;
+  n_configs: number;
 }
 
 export interface RunStatusResponse {
@@ -114,11 +117,23 @@ export interface ReportResponse {
 // Failure drill-down (§8): graded answers with everything to diagnose them.
 // ---------------------------------------------------------------------------
 
-/** A located supporting passage as a char range into a document. */
+/** A plain char range into one document's text. */
+export interface SpanRange {
+  doc_id: string;
+  start_char: number;
+  end_char: number;
+}
+
+/**
+ * A located supporting passage as a char range into a document.
+ * `alternates` are other occurrences of the same quote in the corpus — a hit
+ * on any occurrence counts, so repeated text can't cause false misses.
+ */
 export interface GoldSpan {
   doc_id: string;
   start_char: number;
   end_char: number;
+  alternates?: SpanRange[];
 }
 
 /** A gold span paired with whether retrieval covered it (≥ 50% overlap). */

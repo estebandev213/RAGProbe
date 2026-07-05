@@ -36,6 +36,9 @@ const PHASES: { key: RunStatus; label: string }[] = [
 interface RunNavState {
   documents?: DocumentSummary[];
   demoMode?: boolean;
+  /** Backend-resolved counts from POST /api/runs — no client-side guessing. */
+  nQuestions?: number;
+  nConfigs?: number;
 }
 
 function phaseLogLine(event: RunEvent): { text: string; kind: LogKind } | null {
@@ -216,27 +219,19 @@ export function RunProgressPage() {
     return () => window.clearTimeout(id);
   }, [status, runId, navigate]);
 
+  // Prefer counts observed from live progress events; before any arrive, fall
+  // back to the run-creation response passed through navigation state. A page
+  // opened directly (no state) shows placeholders until events flow.
   const totalQuestions = useMemo(() => {
     const seen = configs.reduce(
       (max, config) => Math.max(max, config.total),
       0,
     );
-    if (seen > 0) return seen;
-    return navState.demoMode === false
-      ? 20
-      : navState.demoMode === true
-        ? 5
-        : 0;
-  }, [configs, navState.demoMode]);
+    return seen > 0 ? seen : (navState.nQuestions ?? 0);
+  }, [configs, navState.nQuestions]);
 
   const configCount =
-    configs.length > 0
-      ? configs.length
-      : navState.demoMode === false
-        ? 6
-        : navState.demoMode === true
-          ? 2
-          : 0;
+    configs.length > 0 ? configs.length : (navState.nConfigs ?? 0);
 
   const docCount = navState.documents?.length ?? 0;
   const totalChars =

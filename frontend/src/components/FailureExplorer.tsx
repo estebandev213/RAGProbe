@@ -315,6 +315,19 @@ export function FailureExplorer({
     return true;
   });
 
+  // Group by question so the same question across multiple configs renders
+  // side by side instead of as duplicate stacked rows.
+  const groupOrder: string[] = [];
+  const groupsByQuestion = new Map<string, FailureRow[]>();
+  for (const row of visible) {
+    if (!groupsByQuestion.has(row.question_id)) {
+      groupsByQuestion.set(row.question_id, []);
+      groupOrder.push(row.question_id);
+    }
+    groupsByQuestion.get(row.question_id)!.push(row);
+  }
+  const groups = groupOrder.map((id) => groupsByQuestion.get(id)!);
+
   async function handleOverride(
     row: FailureRow,
     patch: { correctness?: number; faithfulness?: number },
@@ -390,20 +403,31 @@ export function FailureExplorer({
               : "No graded answers match these filters."}
           </p>
         ) : (
-          visible.map((row) => (
-            <FailureCard
-              key={row.answer_id}
-              row={row}
-              expanded={expanded === row.answer_id}
-              onToggle={() =>
-                setExpanded((current) =>
-                  current === row.answer_id ? null : row.answer_id,
-                )
+          groups.map((group) => (
+            <div
+              key={group[0].question_id}
+              className={
+                group.length > 1
+                  ? "grid gap-3 md:grid-cols-2 items-start"
+                  : undefined
               }
-              colorIndex={colorIndex[row.config_id] ?? 0}
-              busy={busyId === row.answer_id}
-              onOverride={(patch) => handleOverride(row, patch)}
-            />
+            >
+              {group.map((row) => (
+                <FailureCard
+                  key={row.answer_id}
+                  row={row}
+                  expanded={expanded === row.question_id}
+                  onToggle={() =>
+                    setExpanded((current) =>
+                      current === row.question_id ? null : row.question_id,
+                    )
+                  }
+                  colorIndex={colorIndex[row.config_id] ?? 0}
+                  busy={busyId === row.answer_id}
+                  onOverride={(patch) => handleOverride(row, patch)}
+                />
+              ))}
+            </div>
           ))
         )}
       </div>

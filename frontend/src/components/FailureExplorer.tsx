@@ -353,7 +353,14 @@ export function FailureExplorer({
     }
     groupsByQuestion.get(row.question_id)!.push(row);
   }
-  const groups = groupOrder.map((id) => groupsByQuestion.get(id)!);
+  // Sort each group by the leaderboard's config order so a given config
+  // always lands in the same column across every question — never swapping
+  // sides depending on fetch order.
+  const groups = groupOrder.map((id) =>
+    [...groupsByQuestion.get(id)!].sort(
+      (a, b) => (colorIndex[a.config_id] ?? 0) - (colorIndex[b.config_id] ?? 0),
+    ),
+  );
 
   async function handleOverride(
     row: FailureRow,

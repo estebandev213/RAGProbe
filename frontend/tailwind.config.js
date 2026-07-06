@@ -54,6 +54,10 @@ export default {
           from: { opacity: "0", transform: "translateY(4px)" },
           to: { opacity: "1", transform: "translateY(0)" },
         },
+        "glow-pulse": {
+          "0%, 100%": { opacity: "0.06", transform: "scaleX(1)" },
+          "50%": { opacity: "0.16", transform: "scaleX(1.06)" },
+        },
       },
       animation: {
         "fade-in": "fade-in 160ms ease-out",
@@ -62,6 +66,7 @@ export default {
         "pop-in": "pop-in 520ms cubic-bezier(0.16, 1, 0.3, 1) both",
         "line-grow": "line-grow 500ms ease-out both",
         "text-rise": "text-rise 420ms ease-out both",
+        "glow-pulse": "glow-pulse 3.6s ease-in-out infinite",
       },
     },
   },

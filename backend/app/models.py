@@ -255,6 +255,7 @@ class RunStatusResponse(BaseModel):
     status: RunStatus
     error: str | None
     created_at: str
+    title: str | None
 
 
 class RunSummary(BaseModel):

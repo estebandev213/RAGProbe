@@ -48,6 +48,8 @@ export interface RunStatusResponse {
   status: RunStatus;
   error: string | null;
   created_at: string;
+  /** AI-generated name; null until generation lands (or if it failed). */
+  title: string | null;
 }
 
 /** One run in the history list (`GET /api/runs`), newest first. */

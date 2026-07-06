@@ -1,97 +1,41 @@
 import {
-  AlertCircle,
   CalendarClock,
   CheckCircle2,
   ChevronRight,
   FileText,
+  FlaskConical,
   HelpCircle,
   Layers,
-  Loader2,
   Plus,
 } from "lucide-react";
 import { type ReactNode, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { ApiRequestError, listRuns } from "../api/client";
 import { formatAge, formatDateTime } from "../lib/format";
-import type { RunStatus, RunSummary } from "../types";
-
-/** Human label per run status (phase labels mirror RunProgress's `PHASES`). */
-const STATUS_LABEL: Record<RunStatus, string> = {
-  pending: "Queued",
-  generating_exam: "Generating exam",
-  indexing: "Indexing",
-  answering: "Answering",
-  judging: "Judging",
-  done: "Completed",
-  error: "Failed",
-};
+import type { RunSummary } from "../types";
 
 /** "1 doc" / "3 docs" — pluralize a count against a singular noun. */
 function plural(n: number, word: string): string {
   return `${n} ${word}${n === 1 ? "" : "s"}`;
 }
 
-type StatusKind = "done" | "error" | "running";
-
-function statusKind(status: RunStatus): StatusKind {
-  if (status === "done") return "done";
-  if (status === "error") return "error";
-  return "running";
-}
-
-interface StatusVisual {
-  Icon: typeof CheckCircle2;
-  tile: string;
-  badge: string;
-  bar: string;
-  dot: string;
-  spin: boolean;
-  pulse: boolean;
-}
-
-const STATUS_VISUAL: Record<StatusKind, StatusVisual> = {
-  done: {
-    Icon: CheckCircle2,
-    tile: "text-emerald-500 dark:text-emerald-400",
-    badge:
-      "bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-400",
-    bar: "bg-emerald-400 dark:bg-emerald-500/70",
-    dot: "bg-emerald-500",
-    spin: false,
-    pulse: false,
-  },
-  error: {
-    Icon: AlertCircle,
-    tile: "text-red-500 dark:text-red-400",
-    badge: "bg-red-50 text-red-700 dark:bg-red-500/10 dark:text-red-400",
-    bar: "bg-red-400 dark:bg-red-500/70",
-    dot: "bg-red-500",
-    spin: false,
-    pulse: false,
-  },
-  running: {
-    Icon: Loader2,
-    tile: "text-amber-500 dark:text-amber-400",
-    badge:
-      "bg-amber-50 text-amber-700 dark:bg-amber-500/10 dark:text-amber-400",
-    bar: "bg-amber-400 dark:bg-amber-500/70",
-    dot: "bg-amber-500",
-    spin: true,
-    pulse: true,
-  },
-};
-
 /** Page heading with a subtitle and a shortcut back to a fresh evaluation. */
 function Header({ subtitle }: { subtitle: string }) {
   return (
-    <div className="flex flex-wrap items-end justify-between gap-4">
-      <div>
-        <h1 className="font-display text-4xl font-bold tracking-tight text-slate-900 dark:text-white">
-          History
-        </h1>
-        <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">
-          {subtitle}
-        </p>
+    <div className="flex flex-wrap items-center justify-between gap-4">
+      <div className="group flex items-center gap-5">
+        <CalendarClock
+          size={40}
+          className="shrink-0 text-accent transition-transform duration-500 ease-out group-hover:-rotate-12 group-hover:scale-110 motion-reduce:transform-none dark:text-white"
+        />
+        <div>
+          <h1 className="font-display text-4xl font-bold tracking-tight text-slate-900 dark:text-white">
+            History
+          </h1>
+          <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+            {subtitle}
+          </p>
+        </div>
       </div>
       <Link
         to="/"
@@ -143,8 +87,6 @@ function RunRow({ run }: { run: RunSummary }) {
   const created = new Date(run.created_at);
   const validDate = !Number.isNaN(created.getTime());
   const target = `/runs/${run.id}/report`;
-  const { Icon, tile, badge, bar, dot, spin, pulse } =
-    STATUS_VISUAL[statusKind(run.status)];
   const shownDocs = run.document_names.slice(0, 3);
   const extraDocs = run.document_names.length - shownDocs.length;
 
@@ -154,35 +96,19 @@ function RunRow({ run }: { run: RunSummary }) {
         to={target}
         className="card group relative flex items-start gap-4 overflow-hidden py-4 pl-6 pr-5 transition duration-200 hover:-translate-y-0.5 hover:border-accent/40 hover:shadow-xl hover:shadow-accent/5"
       >
-        {/* status accent rail */}
+        {/* soft glow, fading in from the left edge, breathing gently */}
         <span
           aria-hidden
-          className={`absolute inset-y-0 left-0 w-1 ${bar} opacity-80 transition-opacity group-hover:opacity-100`}
+          className="absolute inset-y-0 left-0 w-1/2 origin-left animate-glow-pulse bg-gradient-to-r from-emerald-400 to-transparent transition-[width] duration-300 group-hover:w-2/3 motion-reduce:animate-none motion-reduce:opacity-[0.07] dark:from-emerald-500"
         />
 
-        {/* status icon, with a live ping for in-progress runs */}
         <div className="relative mt-0.5 shrink-0">
-          <div
-            className={`flex h-11 w-11 items-center justify-center transition-transform duration-200 group-hover:scale-105 ${tile}`}
-          >
-            <Icon
+          <div className="flex h-11 w-11 items-center justify-center text-emerald-500 transition-transform duration-200 group-hover:scale-105 dark:text-emerald-400">
+            <CheckCircle2
               size={28}
-              className={
-                spin
-                  ? "animate-spin motion-reduce:animate-none"
-                  : "transition-transform duration-200 group-hover:-rotate-6 motion-reduce:transform-none"
-              }
+              className="transition-transform duration-200 group-hover:-rotate-6 motion-reduce:transform-none"
             />
           </div>
-          {pulse && (
-            <span
-              aria-hidden
-              className="absolute -right-0.5 -top-0.5 flex h-2.5 w-2.5"
-            >
-              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-amber-400 opacity-75 motion-reduce:animate-none" />
-              <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-amber-400" />
-            </span>
-          )}
         </div>
 
         <div className="min-w-0 flex-1">
@@ -190,18 +116,10 @@ function RunRow({ run }: { run: RunSummary }) {
             <p className="truncate font-display text-lg font-semibold tracking-tight text-slate-900 dark:text-white sm:text-xl">
               {run.title}
             </p>
-            <div className="flex shrink-0 items-center gap-2">
-              <span
-                className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium ${badge}`}
-              >
-                <span className={`h-1.5 w-1.5 rounded-full ${dot}`} />
-                {STATUS_LABEL[run.status]}
-              </span>
-              <ChevronRight
-                size={18}
-                className="text-slate-300 transition group-hover:translate-x-0.5 group-hover:text-accent dark:text-slate-600"
-              />
-            </div>
+            <ChevronRight
+              size={18}
+              className="mt-0.5 shrink-0 text-slate-300 transition group-hover:translate-x-0.5 group-hover:text-accent dark:text-slate-600"
+            />
           </div>
 
           <div className="mt-2 flex flex-wrap items-center gap-1.5">
@@ -215,8 +133,11 @@ function RunRow({ run }: { run: RunSummary }) {
               </MetaItem>
             )}
             {run.demo_mode && (
-              <span className="inline-flex items-center rounded-md bg-accent-soft px-2 py-0.5 font-mono text-[10px] font-semibold uppercase tracking-wider text-accent">
-                demo
+              <span
+                title="Demo mode"
+                className="inline-flex items-center rounded-md bg-accent-soft px-1.5 py-0.5 text-accent"
+              >
+                <FlaskConical size={12} />
               </span>
             )}
           </div>
@@ -326,12 +247,11 @@ export function HistoryPage() {
     return <EmptyState />;
   }
 
-  const completed = runs.filter((run) => run.status === "done").length;
   const noun = runs.length === 1 ? "evaluation" : "evaluations";
 
   return (
     <div className="animate-fade-in">
-      <Header subtitle={`${runs.length} ${noun} · ${completed} completed`} />
+      <Header subtitle={`${runs.length} ${noun}`} />
       <ul className="mt-8 space-y-3">
         {runs.map((run) => (
           <RunRow key={run.id} run={run} />

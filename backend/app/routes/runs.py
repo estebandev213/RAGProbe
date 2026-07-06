@@ -237,6 +237,7 @@ def _row_to_status(row: sqlite3.Row) -> RunStatusResponse:
         status=RunStatus(row["status"]),
         error=row["error"],
         created_at=row["created_at"],
+        title=row["title"],
     )
 
 
@@ -247,7 +248,7 @@ async def get_run(
 ) -> RunStatusResponse:
     """Return a status snapshot for one run."""
     row = conn.execute(
-        "SELECT id, status, error, created_at FROM runs WHERE id = ?", (run_id,)
+        "SELECT id, status, error, created_at, title FROM runs WHERE id = ?", (run_id,)
     ).fetchone()
     if row is None:
         raise HTTPException(status_code=404, detail=f"Run {run_id} not found.")

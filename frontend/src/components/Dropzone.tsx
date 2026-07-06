@@ -1,4 +1,4 @@
-import { FilePlus2, Plus } from "lucide-react";
+import { FilePlus2, FolderOpen, Plus, Sparkles } from "lucide-react";
 import { useRef, useState } from "react";
 
 interface DropzoneProps {
@@ -6,6 +6,8 @@ interface DropzoneProps {
   disabled?: boolean;
   /** Slim inline variant shown once documents are already listed. */
   compact?: boolean;
+  /** Shown as a second action beside "Browse files", e.g. loading bundled samples. */
+  onUseSamples?: () => void;
 }
 
 /** Drag-and-drop target plus a Browse button for picking pdf/md/txt files. */
@@ -13,6 +15,7 @@ export function Dropzone({
   onFiles,
   disabled = false,
   compact = false,
+  onUseSamples,
 }: DropzoneProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
@@ -91,14 +94,35 @@ export function Dropzone({
         PDF, Markdown (.md) or Text (.txt)
       </p>
 
-      <button
-        type="button"
-        disabled={disabled}
-        onClick={() => inputRef.current?.click()}
-        className="mt-5 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200"
-      >
-        Browse files
-      </button>
+      <div className="mt-5 flex flex-wrap items-center justify-center gap-3">
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={() => inputRef.current?.click()}
+          className="group flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm transition hover:-translate-y-0.5 hover:border-accent hover:text-accent hover:shadow-md disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:translate-y-0 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200"
+        >
+          <FolderOpen
+            size={16}
+            className="transition duration-300 group-hover:-translate-y-0.5 group-hover:text-accent motion-reduce:transform-none"
+          />
+          Browse files
+        </button>
+
+        {onUseSamples && (
+          <button
+            type="button"
+            disabled={disabled}
+            onClick={onUseSamples}
+            className="group flex items-center gap-2 rounded-lg border border-accent/30 bg-accent-soft px-4 py-2 text-sm font-medium text-accent shadow-sm transition hover:-translate-y-0.5 hover:border-accent hover:bg-accent-soft/70 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:translate-y-0 dark:border-accent/40 dark:bg-accent/15"
+          >
+            <Sparkles
+              size={16}
+              className="transition duration-300 group-hover:rotate-12 group-hover:scale-110 motion-reduce:transform-none"
+            />
+            Use sample documents
+          </button>
+        )}
+      </div>
 
       {fileInput}
     </div>

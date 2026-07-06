@@ -7,7 +7,7 @@ export function Layout({ children }: { children: ReactNode }) {
     <div className="app-gradient min-h-screen">
       <div className="flex min-h-screen w-full">
         <Sidebar />
-        <main className="min-w-0 flex-1 px-5 py-6 sm:px-8 lg:px-12 lg:py-8">
+        <main className="min-w-0 flex-1 px-5 pb-6 pt-10 sm:px-8 sm:pt-14 lg:px-12 lg:pb-8 lg:pt-20">
           {children}
         </main>
       </div>

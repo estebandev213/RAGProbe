@@ -83,7 +83,7 @@ export function ConfigEditor({
             Configuration
           </span>
           <span className="mt-0.5 block text-sm text-slate-500 dark:text-slate-400">
-            Tune the RAG configurations to evaluate — chunk size, strategy,
+            Tune the RAG configurations to evaluate: chunk size, strategy,
             depth.
           </span>
         </span>

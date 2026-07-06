@@ -1,11 +1,12 @@
 import {
   Boxes,
   ClipboardCheck,
-  FileText,
+  Files,
   FlaskConical,
   Gavel,
   PlayCircle,
   ScrollText,
+  Upload,
 } from "lucide-react";
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
@@ -46,10 +47,11 @@ interface UploadedDoc {
 }
 
 const STEPS = [
+  { icon: Upload, text: "Upload your docs" },
   { icon: ScrollText, text: "Generate an exam from your docs" },
   { icon: Boxes, text: "Run against multiple RAG configs" },
   { icon: Gavel, text: "Grade every answer with an LLM judge" },
-  { icon: ClipboardCheck, text: "Get a report with clear recommendations" },
+  { icon: ClipboardCheck, text: "Get a report with recommendations" },
 ];
 
 export function UploadPage() {
@@ -166,7 +168,7 @@ export function UploadPage() {
 
   return (
     <div className="animate-fade-in">
-      <div className="grid gap-8 lg:grid-cols-[1fr_340px] lg:items-center">
+      <div className="grid gap-10 lg:grid-cols-2 lg:items-center">
         <div>
           <p className="font-display text-xs font-semibold uppercase tracking-[0.18em] text-accent">
             Evaluate your RAG pipelines
@@ -179,6 +181,125 @@ export function UploadPage() {
             RAGProbe will generate an exam from your documents, run it against
             multiple RAG configurations, and deliver a detailed report card.
           </p>
+
+          <div className="mt-6 max-w-xs">
+            <button
+              type="button"
+              disabled={busy || docs.length === 0 || duplicateConfigs}
+              onClick={run}
+              className="flex w-full items-center justify-center gap-2 rounded-xl bg-accent px-6 py-3.5 font-display font-semibold text-white shadow-lg shadow-accent/25 transition hover:bg-accent-fg disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <PlayCircle size={20} />
+              Run evaluation
+            </button>
+            <p className="mt-2 text-center text-xs text-slate-400">
+              {duplicateConfigs
+                ? "Resolve duplicate configurations to continue"
+                : `${configs.length} configuration${configs.length === 1 ? "" : "s"} · ${demoMode ? "demo" : "full"} mode`}
+            </p>
+          </div>
+        </div>
+
+        <ol className="flex items-start gap-4 xl:gap-8">
+          {STEPS.map((step, index) => {
+            const Icon = step.icon;
+            return (
+              <li
+                key={step.text}
+                className="group relative flex flex-1 flex-col items-center text-center"
+              >
+                {index < STEPS.length - 1 && (
+                  <span
+                    aria-hidden
+                    style={{ animationDelay: `${index * 160 + 260}ms` }}
+                    className="absolute left-[calc(50%+2rem)] right-[calc(-50%+1rem)] top-8 h-0.5 origin-left animate-line-grow bg-gradient-to-r from-accent/40 to-accent/10 motion-reduce:animate-none xl:right-[-50%]"
+                  />
+                )}
+                <span
+                  style={{ animationDelay: `${index * 160}ms` }}
+                  className="relative z-10 flex h-16 w-16 shrink-0 animate-pop-in items-center justify-center rounded-full bg-accent-soft text-accent ring-1 ring-accent/20 transition-transform duration-300 ease-out motion-reduce:animate-none dark:bg-accent/15 dark:text-slate-300 group-hover:-translate-y-1 group-hover:shadow-lg group-hover:shadow-accent/25"
+                >
+                  <Icon size={28} />
+                </span>
+                <p
+                  style={{ animationDelay: `${index * 160 + 180}ms` }}
+                  className="mt-2.5 animate-text-rise font-mono text-[11px] font-semibold uppercase tracking-wider text-accent motion-reduce:animate-none"
+                >
+                  Step {index + 1}
+                </p>
+                <p
+                  style={{ animationDelay: `${index * 160 + 220}ms` }}
+                  className="mt-1 animate-text-rise text-sm leading-snug text-slate-600 motion-reduce:animate-none dark:text-slate-300"
+                >
+                  {step.text}
+                </p>
+              </li>
+            );
+          })}
+        </ol>
+      </div>
+
+      <div className="mt-12 grid gap-8 lg:grid-cols-[1fr_340px] lg:items-start">
+        <div className="flex flex-col gap-6">
+          <div className="card overflow-hidden">
+            <div className="flex w-full items-center gap-3 px-5 py-4 text-left">
+              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-accent-soft text-accent dark:bg-accent/10">
+                <Upload size={18} />
+              </span>
+              <span className="flex-1">
+                <span className="block font-display font-semibold text-slate-800 dark:text-slate-100">
+                  Upload
+                </span>
+                <span className="mt-0.5 block text-sm text-slate-500 dark:text-slate-400">
+                  You can upload up to 5 files. Max 2MB each.
+                </span>
+              </span>
+              <span className="hidden items-center gap-2 font-mono text-xs text-slate-400 sm:flex">
+                <Files size={13} />
+                {docs.length}/{MAX_FILES}
+              </span>
+            </div>
+
+            <div className="border-t border-slate-200/70 px-5 pb-5 pt-4 dark:border-slate-700/60">
+              {docs.length === 0 ? (
+                <Dropzone
+                  onFiles={ingest}
+                  disabled={busy}
+                  onUseSamples={useSamples}
+                />
+              ) : (
+                <div className="flex flex-col gap-3">
+                  {docs.map((doc) => (
+                    <DocumentRow
+                      key={doc.summary.id}
+                      doc={doc.summary}
+                      sizeBytes={doc.sizeBytes}
+                      onRemove={remove}
+                    />
+                  ))}
+                  {docs.length < MAX_FILES && (
+                    <Dropzone compact onFiles={ingest} disabled={busy} />
+                  )}
+                </div>
+              )}
+
+              {error && (
+                <p
+                  role="alert"
+                  className="mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900/50 dark:bg-red-950/40 dark:text-red-300"
+                >
+                  {error}
+                </p>
+              )}
+            </div>
+          </div>
+
+          <ConfigEditor
+            configs={configs}
+            onChange={setConfigs}
+            maxConfigs={maxConfigs}
+            demoMode={demoMode}
+          />
         </div>
 
         <div className="flex flex-col gap-4">
@@ -196,8 +317,8 @@ export function UploadPage() {
               </p>
               <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
                 {demoMode
-                  ? "Runs a reduced exam and caps you at 2 configurations so the evaluation fits free-tier rate limits. Exact counts are shown when the run starts."
-                  : "Runs the full exam and lets you compare up to 4 configurations. Heavier on LLM calls — mind free-tier rate limits."}
+                  ? "Runs a reduced exam and caps you at 2 configurations so the evaluation fits free-tier rate limits."
+                  : "Runs the full exam and lets you compare up to 4 configurations. Heavier on LLM calls, mind free-tier rate limits."}
               </p>
             </div>
             <Switch
@@ -207,131 +328,49 @@ export function UploadPage() {
             />
           </div>
 
-          <div>
-            <button
-              type="button"
-              disabled={busy || docs.length === 0 || duplicateConfigs}
-              onClick={run}
-              className="flex w-full items-center justify-center gap-2 rounded-xl bg-accent px-6 py-3.5 font-display font-semibold text-white shadow-lg shadow-accent/25 transition hover:bg-accent-fg disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              <PlayCircle size={20} />
-              Run evaluation
-            </button>
-            <p className="mt-2 text-center text-xs text-slate-400">
-              {duplicateConfigs
-                ? "Resolve duplicate configurations to continue"
-                : `${configs.length} configuration${configs.length === 1 ? "" : "s"} · ${demoMode ? "demo" : "full"} mode`}
+          <div className="card p-5">
+            <p className="font-display font-semibold text-slate-800 dark:text-slate-100">
+              How RAGProbe works
             </p>
+            <ul className="mt-3 flex flex-col gap-3">
+              <li className="flex items-start gap-3">
+                <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-accent-soft text-accent dark:bg-accent/10">
+                  <ScrollText size={14} />
+                </span>
+                <p className="text-sm text-slate-500 dark:text-slate-400">
+                  Auto-generates a taxonomy exam: factual, multi-hop,
+                  paraphrase, and unanswerable questions.
+                </p>
+              </li>
+              <li className="flex items-start gap-3">
+                <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-accent-soft text-accent dark:bg-accent/10">
+                  <Boxes size={14} />
+                </span>
+                <p className="text-sm text-slate-500 dark:text-slate-400">
+                  Runs every question through each RAG configuration you define.
+                </p>
+              </li>
+              <li className="flex items-start gap-3">
+                <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-accent-soft text-accent dark:bg-accent/10">
+                  <Gavel size={14} />
+                </span>
+                <p className="text-sm text-slate-500 dark:text-slate-400">
+                  An LLM judge scores correctness, faithfulness, and retrieval
+                  hit for every answer.
+                </p>
+              </li>
+              <li className="flex items-start gap-3">
+                <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-accent-soft text-accent dark:bg-accent/10">
+                  <ClipboardCheck size={14} />
+                </span>
+                <p className="text-sm text-slate-500 dark:text-slate-400">
+                  Every grade ships with a rationale you can inspect, and
+                  override, in the report.
+                </p>
+              </li>
+            </ul>
           </div>
         </div>
-      </div>
-
-      <div className="mt-6">
-        <ConfigEditor
-          configs={configs}
-          onChange={setConfigs}
-          maxConfigs={maxConfigs}
-          demoMode={demoMode}
-        />
-      </div>
-
-      <div className="mt-6">
-        <h2 className="font-display text-lg font-semibold text-slate-800 dark:text-slate-100">
-          Documents ({docs.length}/{MAX_FILES})
-        </h2>
-        <p className="text-sm text-slate-400">
-          You can upload up to 5 files. Max 2MB each.
-        </p>
-
-        <div className="card mt-4 p-5">
-          {docs.length === 0 ? (
-            <Dropzone onFiles={ingest} disabled={busy} />
-          ) : (
-            <div className="flex flex-col gap-3">
-              {docs.map((doc) => (
-                <DocumentRow
-                  key={doc.summary.id}
-                  doc={doc.summary}
-                  sizeBytes={doc.sizeBytes}
-                  onRemove={remove}
-                />
-              ))}
-              {docs.length < MAX_FILES && (
-                <Dropzone compact onFiles={ingest} disabled={busy} />
-              )}
-            </div>
-          )}
-        </div>
-
-        {error && (
-          <p
-            role="alert"
-            className="mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900/50 dark:bg-red-950/40 dark:text-red-300"
-          >
-            {error}
-          </p>
-        )}
-      </div>
-
-      <div className="mt-8">
-        <p className="font-semibold text-slate-800 dark:text-slate-100">
-          What happens next?
-        </p>
-        <ol className="mt-6 flex flex-col gap-8 md:flex-row md:gap-6">
-          {STEPS.map((step, index) => {
-            const Icon = step.icon;
-            return (
-              <li
-                key={step.text}
-                className="relative flex flex-1 items-start gap-4 md:flex-col md:items-center md:text-center"
-              >
-                {index < STEPS.length - 1 && (
-                  <span
-                    aria-hidden
-                    className="absolute -bottom-8 left-7 top-16 w-0.5 bg-gradient-to-b from-accent/40 to-accent/10 md:bottom-auto md:left-1/2 md:right-[-50%] md:top-7 md:h-0.5 md:w-auto md:bg-gradient-to-r"
-                  />
-                )}
-                <span className="relative z-10 flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-accent-soft text-accent ring-1 ring-accent/20 dark:bg-accent/15 dark:text-slate-300">
-                  <Icon size={26} />
-                </span>
-                <div className="md:mt-1 md:max-w-[11rem]">
-                  <p className="font-mono text-[11px] font-semibold uppercase tracking-wider text-accent">
-                    Step {index + 1}
-                  </p>
-                  <p className="mt-0.5 text-sm text-slate-600 dark:text-slate-300">
-                    {step.text}
-                  </p>
-                </div>
-              </li>
-            );
-          })}
-        </ol>
-      </div>
-
-      <div className="mt-16 flex items-start gap-3">
-        <div className="flex h-14 w-14 shrink-0 items-center justify-center text-accent">
-          <FileText
-            size={30}
-            strokeWidth={1.75}
-            className="animate-float-soft motion-reduce:animate-none [animation-delay:1.2s]"
-          />
-        </div>
-        <div>
-          <p className="font-semibold text-slate-800 dark:text-slate-100">
-            Use sample documents
-          </p>
-          <p className="mt-0.5 max-w-xs text-sm text-slate-500 dark:text-slate-400">
-            Load our sample docs to try RAGProbe in seconds. No setup required.
-          </p>
-        </div>
-        <button
-          type="button"
-          disabled={busy}
-          onClick={useSamples}
-          className="ml-auto shrink-0 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200"
-        >
-          Use sample documents
-        </button>
       </div>
     </div>
   );

@@ -100,6 +100,11 @@ export async function createRun(
   });
 }
 
+/** Cancel an in-flight run; the backend tears it down and ends the event stream. */
+export async function cancelRun(runId: string): Promise<void> {
+  await request<void>(`/runs/${runId}/cancel`, { method: "POST" });
+}
+
 /** List every run for the history screen, newest first. */
 export async function listRuns(): Promise<RunSummary[]> {
   return request<RunSummary[]>("/runs");

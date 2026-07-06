@@ -19,13 +19,13 @@ from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from fastapi.responses import StreamingResponse
 
 from app.config import get_settings
 from app.core.chunking import CHUNK_SIZES
 from app.core.exam import exam_size
-from app.core.runner import TOP_K, execute_run, strategies_for
+from app.core.runner import TOP_K, _delete_run, execute_run, strategies_for
 from app.db import get_connection
 from app.events import bus
 from app.models import (
@@ -51,16 +51,17 @@ _TERMINAL = (RunStatus.DONE, RunStatus.ERROR)
 # and reverse proxies in real deployments buffer or kill idle streams.
 _HEARTBEAT_SECONDS = 15.0
 
-# Strong references to in-flight run tasks so the event loop does not garbage
-# collect them mid-run; a done-callback drops each when it completes.
-_background_tasks: set[asyncio.Task[None]] = set()
+# In-flight run tasks keyed by run id. This both keeps a strong reference so the
+# event loop does not garbage collect a task mid-run (a done-callback drops each
+# when it completes) and lets the cancel endpoint reach a running task.
+_run_tasks: dict[str, asyncio.Task[None]] = {}
 
 
 def _spawn_run(run_id: str, doc_ids: list[str], settings: RunSettings) -> None:
     """Launch the orchestrator as a tracked background task."""
     task = asyncio.create_task(execute_run(run_id, doc_ids, settings))
-    _background_tasks.add(task)
-    task.add_done_callback(_background_tasks.discard)
+    _run_tasks[run_id] = task
+    task.add_done_callback(lambda _t: _run_tasks.pop(run_id, None))
 
 
 @router.post("/runs", response_model=RunCreated, status_code=201)
@@ -149,10 +150,17 @@ def _row_to_summary(row: sqlite3.Row, name_by_id: dict[str, str]) -> RunSummary:
 async def list_runs(
     conn: Annotated[sqlite3.Connection, Depends(get_connection)],
 ) -> list[RunSummary]:
-    """List runs for the history screen, newest first."""
+    """List completed runs for the history screen, newest first.
+
+    Only ``done`` runs are surfaced: in-flight, errored, and process-killed
+    "stuck" runs are never valid history entries (failed runs are deleted
+    outright by the orchestrator; a killed process leaves an in-flight row that
+    should not clutter the list).
+    """
     rows = conn.execute(
         "SELECT id, status, error, created_at, doc_ids, settings, title FROM runs "
-        "ORDER BY created_at DESC"
+        "WHERE status = ? ORDER BY created_at DESC",
+        (RunStatus.DONE.value,),
     ).fetchall()
     # Resolve every run's document names for the source chips in one query (§8).
     all_ids = {doc_id for row in rows for doc_id in json.loads(row["doc_ids"])}
@@ -190,6 +198,44 @@ async def get_run(
     if row is None:
         raise HTTPException(status_code=404, detail=f"Run {run_id} not found.")
     return _row_to_status(row)
+
+
+@router.post("/runs/{run_id}/cancel", status_code=202)
+async def cancel_run(
+    run_id: str,
+    conn: Annotated[sqlite3.Connection, Depends(get_connection)],
+) -> Response:
+    """Cancel an in-flight run, tearing it down like a failure (the run is deleted).
+
+    If the run's task is still live, cancel it and let the orchestrator's own
+    ``CancelledError`` handler delete the row and publish the terminal event — this
+    avoids racing the runner's own database connection. If no live task exists,
+    the run finished (successfully, by failure, or by timeout) between the
+    client's last snapshot and this request racing it — its done-callback already
+    popped the task. A terminal ``done`` row is left alone (the run is real and
+    kept); anything else is an orphaned/stuck row (e.g. left by a restarted
+    process) and is deleted.
+    """
+    task = _run_tasks.get(run_id)
+    if task is not None:
+        task.cancel()
+        logger.info("run_cancel_requested", extra={"run_id": run_id})
+        return Response(status_code=202)
+
+    row = conn.execute("SELECT status FROM runs WHERE id = ?", (run_id,)).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"Run {run_id} not found.")
+    if RunStatus(row["status"]) is RunStatus.DONE:
+        # Lost the race to a run that already finished successfully — leave it.
+        logger.info("run_cancel_too_late", extra={"run_id": run_id})
+        return Response(status_code=202)
+    # Orphaned/stuck run: no task will ever publish for it. End any attached SSE
+    # stream and delete the row so it leaves the progress screen and history.
+    bus.publish(run_id, RunEvent(type=RunEventType.ERROR, message="Run cancelled."))
+    bus.close(run_id)
+    _delete_run(conn, run_id)
+    logger.info("run_cancelled_orphan", extra={"run_id": run_id})
+    return Response(status_code=202)
 
 
 def _replay_event(status: RunStatus, error: str | None) -> RunEvent:

@@ -53,6 +53,22 @@ export function formatDateTime(date: Date): string {
   });
 }
 
+/** Wall-clock date only, e.g. "Jul 5, 2026". */
+export function formatDateShort(date: Date): string {
+  return date.toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+}
+
+/** Relative "x ago" for recent runs; falls back to an absolute short date
+ * ("Jul 5, 2026") once the run is more than 30 days old. */
+export function formatAge(from: Date, now: Date = new Date()): string {
+  const days = (now.getTime() - from.getTime()) / 86_400_000;
+  return days > 30 ? formatDateShort(from) : formatRelative(from, now);
+}
+
 /** Coarse "x ago" relative time for the report header. */
 export function formatRelative(from: Date, now: Date = new Date()): string {
   const seconds = Math.max(

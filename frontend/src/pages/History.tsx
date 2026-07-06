@@ -1,14 +1,18 @@
 import {
   AlertCircle,
+  CalendarClock,
   CheckCircle2,
   ChevronRight,
   FileText,
+  HelpCircle,
+  Layers,
   Loader2,
+  Plus,
 } from "lucide-react";
 import { type ReactNode, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { ApiRequestError, listRuns } from "../api/client";
-import { formatDateTime, formatRelative } from "../lib/format";
+import { formatAge, formatDateTime } from "../lib/format";
 import type { RunStatus, RunSummary } from "../types";
 
 /** Human label per run status (phase labels mirror RunProgress's `PHASES`). */
@@ -38,7 +42,6 @@ function statusKind(status: RunStatus): StatusKind {
 interface StatusVisual {
   Icon: typeof CheckCircle2;
   tile: string;
-  ring: string;
   badge: string;
   bar: string;
   dot: string;
@@ -49,8 +52,7 @@ interface StatusVisual {
 const STATUS_VISUAL: Record<StatusKind, StatusVisual> = {
   done: {
     Icon: CheckCircle2,
-    tile: "bg-emerald-50 text-emerald-600 dark:bg-emerald-500/10 dark:text-emerald-400",
-    ring: "ring-emerald-500/20 dark:ring-emerald-400/20",
+    tile: "text-emerald-500 dark:text-emerald-400",
     badge:
       "bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-400",
     bar: "bg-emerald-400 dark:bg-emerald-500/70",
@@ -60,8 +62,7 @@ const STATUS_VISUAL: Record<StatusKind, StatusVisual> = {
   },
   error: {
     Icon: AlertCircle,
-    tile: "bg-red-50 text-red-600 dark:bg-red-500/10 dark:text-red-400",
-    ring: "ring-red-500/20 dark:ring-red-400/20",
+    tile: "text-red-500 dark:text-red-400",
     badge: "bg-red-50 text-red-700 dark:bg-red-500/10 dark:text-red-400",
     bar: "bg-red-400 dark:bg-red-500/70",
     dot: "bg-red-500",
@@ -70,8 +71,7 @@ const STATUS_VISUAL: Record<StatusKind, StatusVisual> = {
   },
   running: {
     Icon: Loader2,
-    tile: "bg-amber-50 text-amber-600 dark:bg-amber-500/10 dark:text-amber-400",
-    ring: "ring-amber-500/20 dark:ring-amber-400/20",
+    tile: "text-amber-500 dark:text-amber-400",
     badge:
       "bg-amber-50 text-amber-700 dark:bg-amber-500/10 dark:text-amber-400",
     bar: "bg-amber-400 dark:bg-amber-500/70",
@@ -95,11 +95,36 @@ function Header({ subtitle }: { subtitle: string }) {
       </div>
       <Link
         to="/"
-        className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm transition hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
+        className="group inline-flex items-center gap-2 rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white shadow-sm shadow-accent/20 transition duration-200 hover:-translate-y-0.5 hover:bg-accent-fg hover:shadow-lg hover:shadow-accent/25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-slate-900"
       >
+        <Plus
+          size={16}
+          className="transition-transform duration-200 group-hover:rotate-90"
+        />
         New evaluation
       </Link>
     </div>
+  );
+}
+
+/** A single metadata stat: icon + value, styled as a subtle inline pill. */
+function MetaItem({
+  Icon,
+  children,
+  title,
+}: {
+  Icon: typeof CalendarClock;
+  children: ReactNode;
+  title?: string;
+}) {
+  return (
+    <span
+      title={title}
+      className="inline-flex items-center gap-1.5 rounded-md bg-slate-100/70 px-2 py-0.5 font-mono text-[11px] tabular-nums text-slate-500 dark:bg-slate-800/60 dark:text-slate-400"
+    >
+      <Icon size={12} className="shrink-0 text-slate-400 dark:text-slate-500" />
+      {children}
+    </span>
   );
 }
 
@@ -112,13 +137,13 @@ function DocChip({ children }: { children: ReactNode }) {
   );
 }
 
-/** One run as a clickable log entry: completed → report, otherwise → progress. */
+/** One run as a clickable log entry. History lists only completed runs, so
+ * every row opens its report. */
 function RunRow({ run }: { run: RunSummary }) {
   const created = new Date(run.created_at);
   const validDate = !Number.isNaN(created.getTime());
-  const target =
-    run.status === "done" ? `/runs/${run.id}/report` : `/runs/${run.id}`;
-  const { Icon, tile, ring, badge, bar, dot, spin, pulse } =
+  const target = `/runs/${run.id}/report`;
+  const { Icon, tile, badge, bar, dot, spin, pulse } =
     STATUS_VISUAL[statusKind(run.status)];
   const shownDocs = run.document_names.slice(0, 3);
   const extraDocs = run.document_names.length - shownDocs.length;
@@ -135,15 +160,17 @@ function RunRow({ run }: { run: RunSummary }) {
           className={`absolute inset-y-0 left-0 w-1 ${bar} opacity-80 transition-opacity group-hover:opacity-100`}
         />
 
-        {/* status icon tile, with a live ping for in-progress runs */}
+        {/* status icon, with a live ping for in-progress runs */}
         <div className="relative mt-0.5 shrink-0">
           <div
-            className={`flex h-11 w-11 items-center justify-center rounded-xl shadow-sm ring-1 ring-inset ${tile} ${ring}`}
+            className={`flex h-11 w-11 items-center justify-center transition-transform duration-200 group-hover:scale-105 ${tile}`}
           >
             <Icon
-              size={20}
+              size={28}
               className={
-                spin ? "animate-spin motion-reduce:animate-none" : undefined
+                spin
+                  ? "animate-spin motion-reduce:animate-none"
+                  : "transition-transform duration-200 group-hover:-rotate-6 motion-reduce:transform-none"
               }
             />
           </div>
@@ -160,7 +187,7 @@ function RunRow({ run }: { run: RunSummary }) {
 
         <div className="min-w-0 flex-1">
           <div className="flex items-start justify-between gap-3">
-            <p className="truncate font-display text-[15px] font-semibold tracking-tight text-slate-900 dark:text-white">
+            <p className="truncate font-display text-lg font-semibold tracking-tight text-slate-900 dark:text-white sm:text-xl">
               {run.title}
             </p>
             <div className="flex shrink-0 items-center gap-2">
@@ -177,23 +204,22 @@ function RunRow({ run }: { run: RunSummary }) {
             </div>
           </div>
 
-          <p className="mt-1 flex flex-wrap items-center gap-x-2 font-mono text-xs tabular-nums text-slate-400">
-            {validDate && <span>{formatDateTime(created)}</span>}
-            {validDate && <span aria-hidden>·</span>}
-            {validDate && <span>{formatRelative(created)}</span>}
-            {validDate && <span aria-hidden>·</span>}
-            <span>{plural(run.n_questions, "question")}</span>
-            <span aria-hidden>·</span>
-            <span>{plural(run.n_configs, "config")}</span>
-            {run.demo_mode && (
-              <>
-                <span aria-hidden>·</span>
-                <span className="rounded bg-slate-100 px-1 text-[10px] font-medium uppercase tracking-wide text-slate-400 dark:bg-slate-800">
-                  demo
-                </span>
-              </>
+          <div className="mt-2 flex flex-wrap items-center gap-1.5">
+            <MetaItem Icon={HelpCircle}>
+              {plural(run.n_questions, "question")}
+            </MetaItem>
+            <MetaItem Icon={Layers}>{plural(run.n_configs, "config")}</MetaItem>
+            {validDate && (
+              <MetaItem Icon={CalendarClock} title={formatDateTime(created)}>
+                {formatAge(created)}
+              </MetaItem>
             )}
-          </p>
+            {run.demo_mode && (
+              <span className="inline-flex items-center rounded-md bg-accent-soft px-2 py-0.5 font-mono text-[10px] font-semibold uppercase tracking-wider text-accent">
+                demo
+              </span>
+            )}
+          </div>
 
           {run.document_names.length > 0 && (
             <div className="mt-2 flex flex-wrap gap-1.5">

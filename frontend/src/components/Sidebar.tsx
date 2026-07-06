@@ -1,6 +1,6 @@
 import { BarChart3, Clock, FileText, Upload as UploadIcon } from "lucide-react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { getLastRunId } from "../lib/session";
+import { getActiveRunId } from "../lib/session";
 import { ThemeToggle } from "./ThemeToggle";
 
 type IconType = typeof UploadIcon;
@@ -16,7 +16,9 @@ interface NavEntry {
 export function Sidebar() {
   const navigate = useNavigate();
   const { pathname } = useLocation();
-  const lastRunId = getLastRunId();
+  // Re-read on every navigation (pathname change re-renders this rail); each
+  // session write in the app is paired with a navigation, so the links stay fresh.
+  const activeRunId = getActiveRunId();
 
   const onRun = pathname.startsWith("/runs/");
   const onReport = pathname.endsWith("/report");
@@ -24,15 +26,18 @@ export function Sidebar() {
   const entries: NavEntry[] = [
     { label: "Upload", icon: UploadIcon, to: "/", active: pathname === "/" },
     {
+      // Progress is a destination only while a run is actively processing.
       label: "Progress",
       icon: Clock,
-      to: lastRunId ? `/runs/${lastRunId}` : null,
+      to: activeRunId ? `/runs/${activeRunId}` : null,
       active: onRun && !onReport,
     },
     {
+      // Report is reachable only via a progress-completion or history redirect;
+      // the rail merely indicates when one is open, never offers a shortcut.
       label: "Report",
       icon: BarChart3,
-      to: lastRunId ? `/runs/${lastRunId}/report` : null,
+      to: null,
       active: onReport,
     },
     {

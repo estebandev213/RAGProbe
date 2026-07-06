@@ -232,6 +232,24 @@ def _enter_phase(conn: sqlite3.Connection, run_id: str, status: RunStatus) -> No
     bus.publish(run_id, RunEvent(type=RunEventType.PHASE, phase=status))
 
 
+def _delete_run(conn: sqlite3.Connection, run_id: str) -> None:
+    """Delete a run and everything hanging off it, children first (FKs are ON).
+
+    A failed run is not kept: it never appears in history and its report 404s.
+    Deletion order follows the foreign keys — grades reference answers, and
+    answers/configs/questions reference the run.
+    """
+    conn.execute(
+        "DELETE FROM grades WHERE answer_id IN (SELECT id FROM answers WHERE run_id = ?)",
+        (run_id,),
+    )
+    conn.execute("DELETE FROM answers   WHERE run_id = ?", (run_id,))
+    conn.execute("DELETE FROM configs   WHERE run_id = ?", (run_id,))
+    conn.execute("DELETE FROM questions WHERE run_id = ?", (run_id,))
+    conn.execute("DELETE FROM runs      WHERE id     = ?", (run_id,))
+    conn.commit()
+
+
 async def execute_run(
     run_id: str,
     doc_ids: Sequence[str],
@@ -267,78 +285,108 @@ async def execute_run(
         extra={"run_id": run_id, "independent_judge": judge is not answerer},
     )
 
+    max_run_seconds = get_settings().max_run_seconds
     with get_db() as conn:
         try:
-            documents = _load_documents(conn, doc_ids)
-            if not documents:
-                raise ValueError("Run has no resolvable documents to evaluate.")
+            # A hard deadline caps a run that the free-tier rate limiter would
+            # otherwise drag out indefinitely; on expiry this raises TimeoutError,
+            # handled below like any other failure (the run is deleted).
+            async with asyncio.timeout(max_run_seconds):
+                documents = _load_documents(conn, doc_ids)
+                if not documents:
+                    raise ValueError("Run has no resolvable documents to evaluate.")
 
-            # Name the run from its documents so History shows a recognizable
-            # title (§8). Best-effort: a title failure must never fail the run —
-            # the list endpoint falls back to the document names.
-            try:
-                title = await generate_title(answerer, documents)
-                if title:
-                    conn.execute("UPDATE runs SET title = ? WHERE id = ?", (title, run_id))
-                    conn.commit()
-            except LLMError:
-                logger.warning("title_generation_failed", extra={"run_id": run_id})
+                # Name the run from its documents so History shows a recognizable
+                # title (§8). Best-effort: a title failure must never fail the run —
+                # the list endpoint falls back to the document names.
+                try:
+                    title = await generate_title(answerer, documents)
+                    if title:
+                        conn.execute("UPDATE runs SET title = ? WHERE id = ?", (title, run_id))
+                        conn.commit()
+                except LLMError:
+                    logger.warning("title_generation_failed", extra={"run_id": run_id})
 
-            _enter_phase(conn, run_id, RunStatus.GENERATING_EXAM)
-            questions = await generate_exam(answerer, run_id, documents, settings.n_questions)
-            insert_questions(conn, questions)
+                _enter_phase(conn, run_id, RunStatus.GENERATING_EXAM)
+                questions = await generate_exam(answerer, run_id, documents, settings.n_questions)
+                insert_questions(conn, questions)
 
-            _enter_phase(conn, run_id, RunStatus.INDEXING)
-            for document in documents:
-                await asyncio.to_thread(index_document, conn, document.doc_id, document.text, embed)
+                _enter_phase(conn, run_id, RunStatus.INDEXING)
+                for document in documents:
+                    await asyncio.to_thread(
+                        index_document, conn, document.doc_id, document.text, embed
+                    )
 
-            _enter_phase(conn, run_id, RunStatus.ANSWERING)
-            configs = build_config_matrix(run_id, settings.demo_mode)
-            insert_configs(conn, configs)
-            retrievers = {
-                strategy: make_retriever(strategy, conn, doc_ids, embed)
-                for strategy in strategies_for(settings.demo_mode)
-            }
+                _enter_phase(conn, run_id, RunStatus.ANSWERING)
+                configs = build_config_matrix(run_id, settings.demo_mode)
+                insert_configs(conn, configs)
+                retrievers = {
+                    strategy: make_retriever(strategy, conn, doc_ids, embed)
+                    for strategy in strategies_for(settings.demo_mode)
+                }
 
-            total = len(questions)
-            for config in configs:
-                retriever = retrievers[config.strategy]
-                for done, question in enumerate(questions, start=1):
-                    result = await answer_question(answerer, retriever, question, config)
-                    insert_answer(conn, run_id, config.id, question.id, result)
+                total = len(questions)
+                for config in configs:
+                    retriever = retrievers[config.strategy]
+                    for done, question in enumerate(questions, start=1):
+                        result = await answer_question(answerer, retriever, question, config)
+                        insert_answer(conn, run_id, config.id, question.id, result)
+                        bus.publish(
+                            run_id,
+                            RunEvent(
+                                type=RunEventType.PROGRESS,
+                                phase=RunStatus.ANSWERING,
+                                config_label=config.label,
+                                done=done,
+                                total=total,
+                            ),
+                        )
                     bus.publish(
                         run_id,
-                        RunEvent(
-                            type=RunEventType.PROGRESS,
-                            phase=RunStatus.ANSWERING,
-                            config_label=config.label,
-                            done=done,
-                            total=total,
-                        ),
+                        RunEvent(type=RunEventType.CONFIG_DONE, config_label=config.label),
                     )
-                bus.publish(
-                    run_id,
-                    RunEvent(type=RunEventType.CONFIG_DONE, config_label=config.label),
+
+                _enter_phase(conn, run_id, RunStatus.JUDGING)
+                await judge_answers(conn, judge, run_id, questions)
+
+                _enter_phase(conn, run_id, RunStatus.DONE)
+                bus.publish(run_id, RunEvent(type=RunEventType.RUN_DONE))
+                logger.info(
+                    "run_done",
+                    extra={"run_id": run_id, "configs": len(configs), "questions": total},
                 )
-
-            _enter_phase(conn, run_id, RunStatus.JUDGING)
-            await judge_answers(conn, judge, run_id, questions)
-
-            _enter_phase(conn, run_id, RunStatus.DONE)
-            bus.publish(run_id, RunEvent(type=RunEventType.RUN_DONE))
-            logger.info(
-                "run_done",
-                extra={"run_id": run_id, "configs": len(configs), "questions": total},
-            )
+        except asyncio.CancelledError:
+            # A cancel request (POST /runs/{id}/cancel) cancels this task.
+            # CancelledError is a BaseException, so it bypasses the `except
+            # Exception` below — tear the run down here, then re-raise so the task
+            # is properly marked cancelled.
+            bus.publish(run_id, RunEvent(type=RunEventType.ERROR, message="Run cancelled."))
+            logger.info("run_cancelled", extra={"run_id": run_id})
+            try:
+                _delete_run(conn, run_id)
+            except sqlite3.Error:
+                logger.exception("run_cleanup_failed", extra={"run_id": run_id})
+            raise
+        except TimeoutError:
+            minutes = round(max_run_seconds / 60)
+            message = f"Run exceeded the {minutes}-minute limit and was cancelled."
+            bus.publish(run_id, RunEvent(type=RunEventType.ERROR, message=message))
+            logger.warning("run_timed_out", extra={"run_id": run_id})
+            try:
+                _delete_run(conn, run_id)
+            except sqlite3.Error:
+                logger.exception("run_cleanup_failed", extra={"run_id": run_id})
         except Exception as exc:
             message = str(exc)
-            conn.execute(
-                "UPDATE runs SET status = ?, error = ? WHERE id = ?",
-                (RunStatus.ERROR.value, message, run_id),
-            )
-            conn.commit()
+            # Publish the failure first so the live progress page receives the
+            # message before the run is torn down, then delete the run — failed
+            # runs are not persisted (no history entry, no revisitable report).
             bus.publish(run_id, RunEvent(type=RunEventType.ERROR, message=message))
             logger.exception("run_failed", extra={"run_id": run_id})
+            try:
+                _delete_run(conn, run_id)
+            except sqlite3.Error:
+                logger.exception("run_cleanup_failed", extra={"run_id": run_id})
         finally:
             bus.close(run_id)
             if owns_judge:

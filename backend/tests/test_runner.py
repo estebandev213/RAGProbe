@@ -6,10 +6,12 @@ fast. The end-to-end test drives :func:`execute_run` against the bundled fixture
 and asserts the persisted matrix, the answer rows, and the emitted SSE events.
 """
 
+import asyncio
 import hashlib
 import json
 from collections.abc import Iterator, Sequence
 from pathlib import Path
+from typing import NoReturn
 
 import httpx
 import pytest
@@ -355,6 +357,147 @@ async def test_execute_run_routes_judging_to_independent_judge(run_db: str) -> N
         assert "rationale" not in prompt
 
 
+@respx.mock
+async def test_execute_run_deletes_failed_run(run_db: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A failed run publishes its error, then is removed entirely — no lingering
+    error row, and none of its child rows survive."""
+    _seed_run(run_db)
+    # Title generation makes the only real Groq call before the (patched) failure;
+    # a plain completion lets it fail its JSON parse gracefully and fall back.
+    respx.post(URL).mock(return_value=_answer_response())
+
+    async def _boom(*args: object, **kwargs: object) -> object:
+        raise RuntimeError("exam generation blew up")
+
+    monkeypatch.setattr("app.core.runner.generate_exam", _boom)
+
+    from app.events import bus
+
+    queue = bus.subscribe("run1")
+    settings = RunSettings(demo_mode=True, n_questions=DEMO_EXAM_SIZE, top_k=TOP_K)
+
+    async with _client() as client:
+        await execute_run("run1", ["doc1"], settings, embed=_fake_embedder, client=client)
+
+    events: list[RunEvent] = []
+    while not queue.empty():
+        event = queue.get_nowait()
+        if event is None:
+            break
+        events.append(event)
+    bus.unsubscribe("run1", queue)
+
+    # The failure surfaced as an error event carrying the message...
+    error_events = [e for e in events if e.type is RunEventType.ERROR]
+    assert error_events
+    assert "exam generation blew up" in (error_events[0].message or "")
+
+    # ...and the run and every child row are gone.
+    conn = connect(run_db)
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM runs WHERE id = 'run1'").fetchone()[0] == 0
+        for table in ("questions", "configs", "answers", "grades"):
+            assert conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0
+    finally:
+        conn.close()
+
+
+def _drain(queue: object) -> list[RunEvent]:
+    """Collect buffered events up to the end-of-stream sentinel."""
+    events: list[RunEvent] = []
+    while not queue.empty():  # type: ignore[attr-defined]
+        event = queue.get_nowait()  # type: ignore[attr-defined]
+        if event is None:
+            break
+        events.append(event)
+    return events
+
+
+@respx.mock
+async def test_execute_run_cancelled_deletes_run(
+    run_db: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Cancelling the run task tears the run down: an error event is published and
+    the run (a BaseException CancelledError would otherwise skip cleanup) is gone."""
+    _seed_run(run_db)
+    respx.post(URL).mock(return_value=_answer_response())
+
+    started = asyncio.Event()
+
+    async def _hang(*args: object, **kwargs: object) -> NoReturn:
+        started.set()
+        await asyncio.Event().wait()  # blocks until cancelled
+        raise AssertionError("unreachable")
+
+    monkeypatch.setattr("app.core.runner.generate_exam", _hang)
+
+    from app.events import bus
+
+    queue = bus.subscribe("run1")
+    settings = RunSettings(demo_mode=True, n_questions=DEMO_EXAM_SIZE, top_k=TOP_K)
+
+    async with _client() as client:
+        task = asyncio.create_task(
+            execute_run("run1", ["doc1"], settings, embed=_fake_embedder, client=client)
+        )
+        await asyncio.wait_for(started.wait(), timeout=5)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    events = _drain(queue)
+    bus.unsubscribe("run1", queue)
+
+    error_events = [e for e in events if e.type is RunEventType.ERROR]
+    assert error_events
+    assert "cancel" in (error_events[0].message or "").lower()
+
+    conn = connect(run_db)
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM runs WHERE id = 'run1'").fetchone()[0] == 0
+    finally:
+        conn.close()
+
+
+@respx.mock
+async def test_execute_run_times_out_deletes_run(
+    run_db: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A run that exceeds MAX_RUN_SECONDS self-terminates: it is deleted and an
+    error event carrying the limit message is published."""
+    _seed_run(run_db)
+    respx.post(URL).mock(return_value=_answer_response())
+    monkeypatch.setenv("MAX_RUN_SECONDS", "0.3")
+    get_settings.cache_clear()
+
+    async def _hang(*args: object, **kwargs: object) -> NoReturn:
+        await asyncio.Event().wait()  # never returns; the deadline fires
+        raise AssertionError("unreachable")
+
+    monkeypatch.setattr("app.core.runner.generate_exam", _hang)
+
+    from app.events import bus
+
+    queue = bus.subscribe("run1")
+    settings = RunSettings(demo_mode=True, n_questions=DEMO_EXAM_SIZE, top_k=TOP_K)
+
+    async with _client() as client:
+        await execute_run("run1", ["doc1"], settings, embed=_fake_embedder, client=client)
+
+    events = _drain(queue)
+    bus.unsubscribe("run1", queue)
+
+    error_events = [e for e in events if e.type is RunEventType.ERROR]
+    assert error_events
+    assert "limit" in (error_events[0].message or "").lower()
+
+    conn = connect(run_db)
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM runs WHERE id = 'run1'").fetchone()[0] == 0
+    finally:
+        conn.close()
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -435,3 +578,83 @@ def test_events_endpoint_replays_terminal_status(api: tuple[TestClient, str]) ->
 def test_events_endpoint_unknown_run_returns_404(api: tuple[TestClient, str]) -> None:
     client, _ = api
     assert client.get("/api/runs/missing/events").status_code == 404
+
+
+def test_cancel_run_unknown_returns_404(api: tuple[TestClient, str]) -> None:
+    client, _ = api
+    assert client.post("/api/runs/missing/cancel").status_code == 404
+
+
+def test_cancel_run_orphan_deletes_row(api: tuple[TestClient, str]) -> None:
+    """A stuck in-flight row with no live task (e.g. after a restart) is deleted
+    by the cancel endpoint so it leaves the progress screen and history."""
+    client, db_path = api
+    conn = connect(db_path)
+    try:
+        conn.execute(
+            "INSERT INTO runs (id, status, doc_ids, settings, created_at) VALUES (?, ?, ?, ?, ?)",
+            ("orphan1", RunStatus.ANSWERING.value, "[]", "{}", "2026-06-13T00:00:00Z"),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    resp = client.post("/api/runs/orphan1/cancel")
+    assert resp.status_code == 202
+
+    conn = connect(db_path)
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM runs WHERE id = 'orphan1'").fetchone()[0] == 0
+    finally:
+        conn.close()
+
+
+def test_cancel_run_after_completion_does_not_delete(api: tuple[TestClient, str]) -> None:
+    """A cancel request that loses the race to a just-finished run must not nuke it.
+
+    By the time cancel arrives the task is already gone from the in-flight table
+    (its done-callback popped it), so the endpoint falls into the "orphan" path.
+    If that path deletes unconditionally, a client racing the `run_done` event
+    with a cancel click destroys a successful run out from under itself.
+    """
+    client, db_path = api
+    conn = connect(db_path)
+    try:
+        conn.execute(
+            "INSERT INTO runs (id, status, doc_ids, settings, created_at) VALUES (?, ?, ?, ?, ?)",
+            ("done1", RunStatus.DONE.value, "[]", "{}", "2026-06-13T00:00:00Z"),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    client.post("/api/runs/done1/cancel")
+
+    conn = connect(db_path)
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM runs WHERE id = 'done1'").fetchone()[0] == 1
+    finally:
+        conn.close()
+
+
+def test_list_runs_returns_only_completed(api: tuple[TestClient, str]) -> None:
+    """History lists only ``done`` runs — in-flight, error, and pending are hidden."""
+    client, db_path = api
+    settings = '{"demo_mode": true, "n_questions": 12, "top_k": 5}'
+    insert = "INSERT INTO runs (id, status, doc_ids, settings, created_at) VALUES (?, ?, ?, ?, ?)"
+    conn = connect(db_path)
+    try:
+        for run_id, status in (
+            ("done1", RunStatus.DONE.value),
+            ("answering1", RunStatus.ANSWERING.value),
+            ("error1", RunStatus.ERROR.value),
+            ("pending1", RunStatus.PENDING.value),
+        ):
+            conn.execute(insert, (run_id, status, "[]", settings, "2026-06-13T00:00:00Z"))
+        conn.commit()
+    finally:
+        conn.close()
+
+    resp = client.get("/api/runs")
+    assert resp.status_code == 200
+    assert [row["id"] for row in resp.json()] == ["done1"]

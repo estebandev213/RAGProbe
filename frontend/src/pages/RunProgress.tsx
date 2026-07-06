@@ -1,5 +1,7 @@
 import {
+  AlertTriangle,
   ArrowLeft,
+  Ban,
   Copy,
   FileText,
   FlaskConical,
@@ -9,7 +11,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
-import { getRun, subscribeToRun } from "../api/client";
+import { cancelRun, getRun, subscribeToRun } from "../api/client";
 import {
   ConfigProgressList,
   type ConfigProgress,
@@ -22,7 +24,7 @@ import {
 } from "../components/PhaseTimeline";
 import { StatCard } from "../components/StatCard";
 import { formatClock, formatElapsed, formatNumber } from "../lib/format";
-import { setLastRunId } from "../lib/session";
+import { clearActiveRunId } from "../lib/session";
 import type { DocumentSummary, RunEvent, RunStatus } from "../types";
 
 const PHASES: { key: RunStatus; label: string }[] = [
@@ -32,6 +34,13 @@ const PHASES: { key: RunStatus; label: string }[] = [
   { key: "judging", label: "Judging" },
   { key: "done", label: "Done" },
 ];
+
+// Progress-stream silence thresholds. EventSource ignores the backend's 15s
+// keepalive comment frames, so a gap between `onmessage` events is a true "no
+// progress" signal. Kept generous: a single slow exam-gen or judging LLM call
+// can legitimately go quiet for a while. Warn first, then auto-cancel.
+const STALL_WARN_MS = 90_000;
+const STALL_AUTO_MS = 240_000;
 
 interface RunNavState {
   documents?: DocumentSummary[];
@@ -91,9 +100,19 @@ export function RunProgressPage() {
   const [elapsed, setElapsed] = useState(0);
   const [phaseEntry, setPhaseEntry] = useState<Record<string, number>>({});
   const [startedLabel, setStartedLabel] = useState("");
+  const [stalled, setStalled] = useState(false);
+  const [confirmingCancel, setConfirmingCancel] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
 
   const startMsRef = useRef<number>(0);
   const logIdRef = useRef(0);
+  // Timestamp of the last progress event; drives the stall watchdog below.
+  const lastEventMsRef = useRef<number>(0);
+  // The live EventSource, so the cancel handler can close it before the backend
+  // publishes its terminal event (which would otherwise fire the error redirect).
+  const sourceRef = useRef<EventSource | null>(null);
+  const cancellingRef = useRef(false);
+  const autoCancelRef = useRef(false);
 
   const pushLog = useCallback((text: string, kind: LogKind) => {
     const entry: LogEntry = {
@@ -105,10 +124,9 @@ export function RunProgressPage() {
     setLog((current) => [...current, entry].slice(-200));
   }, []);
 
-  // Seed the log and remember this run for the sidebar's quick links.
+  // Seed the log.
   useEffect(() => {
     if (!runId) return;
-    setLastRunId(runId);
     pushLog("Run created", "info");
     if (navState.demoMode !== undefined) {
       pushLog(
@@ -126,11 +144,29 @@ export function RunProgressPage() {
 
     // Provisional start (refined below from the run's created_at).
     startMsRef.current = Date.now();
+    lastEventMsRef.current = Date.now();
+    cancellingRef.current = false;
+    autoCancelRef.current = false;
     setStartedLabel(formatClock(new Date(startMsRef.current)));
 
+    // Progress is only shown for a run that is actively processing. The snapshot
+    // decides: a finished run hands off to its report, a failed/unknown one (a
+    // failed run is deleted, so this 404s) bounces to upload, and only an
+    // in-flight run renders here — however the URL was reached.
     getRun(runId)
       .then((snapshot) => {
         if (!active) return;
+        if (snapshot.status === "done") {
+          navigate(`/runs/${runId}/report`, { replace: true });
+          return;
+        }
+        if (snapshot.status === "error") {
+          navigate(`/runs/${runId}/report`, {
+            replace: true,
+            state: { error: snapshot.error ?? "The run failed." },
+          });
+          return;
+        }
         const started = Date.parse(snapshot.created_at);
         if (!Number.isNaN(started)) {
           startMsRef.current = started;
@@ -139,16 +175,21 @@ export function RunProgressPage() {
         setStatus(snapshot.status);
         if (snapshot.error) setError(snapshot.error);
       })
-      .catch(() => undefined);
+      .catch(() => {
+        if (active) navigate("/", { replace: true });
+      });
 
     const source = subscribeToRun(runId, {
       onEvent: (event) => {
-        if (!active) return;
+        if (!active || cancellingRef.current) return;
+        lastEventMsRef.current = Date.now();
+        setStalled(false);
         setConnected(true);
         handleEvent(event);
       },
       onError: () => active && setConnected(false),
     });
+    sourceRef.current = source;
 
     function handleEvent(event: RunEvent) {
       const line = phaseLogLine(event);
@@ -198,6 +239,7 @@ export function RunProgressPage() {
     return () => {
       active = false;
       source.close();
+      sourceRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [runId]);
@@ -212,12 +254,63 @@ export function RunProgressPage() {
     return () => window.clearInterval(id);
   }, [terminal]);
 
-  // On completion, hand off to the report card.
+  // Cancel the run: close the stream first so the backend's terminal event does
+  // not also fire the error redirect, ask the backend to tear it down (which
+  // deletes it), then return to upload. Best-effort — even if the request fails
+  // we leave the stuck screen.
+  const cancelRunNow = useCallback(async () => {
+    if (cancellingRef.current) return;
+    cancellingRef.current = true;
+    setCancelling(true);
+    sourceRef.current?.close();
+    clearActiveRunId();
+    try {
+      await cancelRun(runId);
+    } catch {
+      // Ignore: the run is being abandoned regardless.
+    }
+    navigate("/", { replace: true });
+  }, [runId, navigate]);
+
+  // Stall watchdog: when the progress stream goes silent past the thresholds,
+  // warn, then auto-cancel once. Catches both a free-tier crawl and an orphaned
+  // run left by a restarted worker (which will never publish again).
+  useEffect(() => {
+    if (terminal) return;
+    const id = window.setInterval(() => {
+      const silent = Date.now() - lastEventMsRef.current;
+      setStalled(silent >= STALL_WARN_MS);
+      if (silent >= STALL_AUTO_MS && !autoCancelRef.current) {
+        autoCancelRef.current = true;
+        void cancelRunNow();
+      }
+    }, 1000);
+    return () => window.clearInterval(id);
+  }, [terminal, cancelRunNow]);
+
+  // On success, hand off to the report card. `replace` keeps the now-finished
+  // progress URL out of history.
   useEffect(() => {
     if (status !== "done") return;
-    const id = window.setTimeout(() => navigate(`/runs/${runId}/report`), 700);
+    clearActiveRunId();
+    const id = window.setTimeout(
+      () => navigate(`/runs/${runId}/report`, { replace: true }),
+      700,
+    );
     return () => window.clearTimeout(id);
   }, [status, runId, navigate]);
+
+  // On failure, hand off to the report page as an error page, carrying the
+  // message in navigation state (the run is being deleted, so it can't be
+  // re-fetched). `replace` prevents backing into the dead progress URL.
+  useEffect(() => {
+    if (status !== "error" || cancellingRef.current) return;
+    clearActiveRunId();
+    navigate(`/runs/${runId}/report`, {
+      replace: true,
+      state: { error: error ?? "The run failed." },
+    });
+  }, [status, error, runId, navigate]);
 
   // Prefer counts observed from live progress events; before any arrive, fall
   // back to the run-creation response passed through navigation state. A page
@@ -323,6 +416,39 @@ export function RunProgressPage() {
               </span>
             )}
           </div>
+
+          {!terminal &&
+            (confirmingCancel ? (
+              <div className="mt-4 flex flex-wrap items-center gap-2">
+                <span className="text-sm text-slate-500 dark:text-slate-400">
+                  Cancel this run? It will be discarded.
+                </span>
+                <button
+                  type="button"
+                  onClick={() => void cancelRunNow()}
+                  disabled={cancelling}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-red-500 px-3 py-1.5 text-sm font-semibold text-white shadow-sm transition hover:bg-red-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500 focus-visible:ring-offset-2 focus-visible:ring-offset-white disabled:opacity-60 dark:focus-visible:ring-offset-slate-900"
+                >
+                  <Ban size={15} /> Confirm cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setConfirmingCancel(false)}
+                  disabled={cancelling}
+                  className="rounded-lg px-3 py-1.5 text-sm font-medium text-slate-500 transition hover:text-slate-700 disabled:opacity-60 dark:text-slate-400 dark:hover:text-slate-200"
+                >
+                  Keep running
+                </button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setConfirmingCancel(true)}
+                className="mt-4 inline-flex items-center gap-1.5 rounded-lg border border-red-300 bg-white px-3 py-1.5 text-sm font-medium text-red-600 shadow-sm transition hover:bg-red-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:border-red-500/40 dark:bg-slate-800 dark:text-red-400 dark:hover:bg-red-500/10 dark:focus-visible:ring-offset-slate-900"
+              >
+                <Ban size={15} /> Cancel run
+              </button>
+            ))}
         </div>
 
         <div className="flex flex-wrap gap-3">
@@ -368,6 +494,26 @@ export function RunProgressPage() {
           </div>
         </div>
       </div>
+
+      {stalled && !terminal && (
+        <div
+          role="status"
+          className="mt-6 flex items-start gap-3 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm dark:border-amber-500/30 dark:bg-amber-500/10"
+        >
+          <AlertTriangle
+            size={18}
+            className="mt-0.5 shrink-0 text-amber-600 dark:text-amber-400"
+          />
+          <div className="text-amber-800 dark:text-amber-300">
+            <p className="font-semibold">This run appears stalled.</p>
+            <p className="text-amber-700/90 dark:text-amber-300/80">
+              No progress has arrived in a while — it may be throttled by the
+              free tier, or the worker may have stopped. It will auto-cancel if
+              this continues, or you can cancel it now and start over.
+            </p>
+          </div>
+        </div>
+      )}
 
       {error ? (
         <div

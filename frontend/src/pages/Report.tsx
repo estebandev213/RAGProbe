@@ -1,4 +1,5 @@
 import {
+  AlertTriangle,
   ArrowLeft,
   CheckCircle2,
   Copy,
@@ -8,7 +9,7 @@ import {
   Zap,
 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useLocation, useParams } from "react-router-dom";
 import { ApiRequestError, getReport, getRun } from "../api/client";
 import { FailureExplorer } from "../components/FailureExplorer";
 import { Leaderboard } from "../components/Leaderboard";
@@ -62,6 +63,10 @@ function configById(
 
 export function ReportPage() {
   const { runId = "" } = useParams();
+  // A run that failed navigates here with its message in state; the run itself
+  // has been deleted, so this page is rendered purely as an error page.
+  const navState = useLocation().state as { error?: string } | null;
+  const failureMessage = navState?.error ?? null;
   const [report, setReport] = useState<ReportResponse | null>(null);
   const [created, setCreated] = useState<Date | null>(null);
   const [loading, setLoading] = useState(true);
@@ -75,7 +80,9 @@ export function ReportPage() {
   }, [runId]);
 
   useEffect(() => {
-    if (!runId) return;
+    // A failed run renders from navigation state alone — never fetch (its rows
+    // are gone, so the request would only 404).
+    if (!runId || failureMessage) return;
     let active = true;
     // State is mutated only inside the async continuations below — a synchronous
     // reset here would trigger a cascading render the effect lint rule forbids.
@@ -101,16 +108,53 @@ export function ReportPage() {
     return () => {
       active = false;
     };
-  }, [runId]);
+  }, [runId, failureMessage]);
 
+  // Progress is transient (and a failed run is gone), so the report never links
+  // back to it — a fresh evaluation is the sensible way out of every dead end.
   const backLink = (
     <Link
-      to={`/runs/${runId}`}
+      to="/"
       className="inline-flex items-center gap-1.5 text-sm font-medium text-accent hover:underline"
     >
-      <ArrowLeft size={16} /> Back to progress
+      <ArrowLeft size={16} /> New evaluation
     </Link>
   );
+
+  // A failed run: render this page as a dedicated error page from the message
+  // carried in navigation state, with no leaderboard to show.
+  if (failureMessage) {
+    return (
+      <div className="animate-fade-in">
+        {backLink}
+        <div className="card mt-6 flex flex-col items-center gap-3 p-12 text-center">
+          <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-red-100 text-red-600 dark:bg-red-900/50 dark:text-red-300">
+            <AlertTriangle size={26} />
+          </div>
+          <p className="font-display text-lg font-semibold text-slate-800 dark:text-slate-100">
+            Run failed
+          </p>
+          <p className="max-w-md text-sm text-slate-500 dark:text-slate-400">
+            {failureMessage}
+          </p>
+          <div className="mt-2 flex flex-wrap items-center justify-center gap-3">
+            <Link
+              to="/"
+              className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white transition hover:bg-accent-fg"
+            >
+              Start a new evaluation
+            </Link>
+            <Link
+              to="/history"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-4 py-2 text-sm font-medium text-slate-600 transition hover:bg-slate-100/70 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800/60"
+            >
+              View history
+            </Link>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   if (loading) {
     return (

@@ -18,7 +18,7 @@ import {
 import { DocumentRow } from "../components/DocumentRow";
 import { Dropzone } from "../components/Dropzone";
 import { Switch } from "../components/Switch";
-import { setLastRunId } from "../lib/session";
+import { setActiveRunId } from "../lib/session";
 import type { DocumentSummary } from "../types";
 
 const MAX_FILES = 5;
@@ -118,7 +118,7 @@ export function UploadPage() {
         summaries.map((summary) => summary.id),
         demoMode,
       );
-      setLastRunId(run_id);
+      setActiveRunId(run_id);
       navigate(`/runs/${run_id}`, {
         state: {
           documents: summaries,

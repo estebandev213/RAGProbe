@@ -44,6 +44,11 @@ class Settings(BaseSettings):
     # Request-rate budget for the answering provider (Groq free tier).
     llm_rate_per_min: int = 15
 
+    # Hard ceiling on a single run's wall-clock time. A run throttled by the free
+    # tier can otherwise grind for a very long time; past this it self-terminates
+    # (deleted like a failure) so a stuck run cannot run forever server-side.
+    max_run_seconds: float = 1800.0
+
     # Independent judge (optional but recommended): when GEMINI_API_KEY is set,
     # grading runs on Gemini — a different model *family* from the answerer,
     # removing self-preference bias from the scores. Left empty, judging falls

@@ -34,7 +34,10 @@ from app.core.indexing import (
     tokenize_for_bm25,
 )
 
-STRATEGIES: tuple[str, ...] = ("vector", "bm25", "hybrid")
+# STRATEGIES lives in app.models (the single source of truth shared with the
+# request validator) and is re-exported here so retrieval callers can keep
+# importing it from this module.
+from app.models import STRATEGIES
 
 # Reciprocal Rank Fusion constant (§6.2): score = Σ 1 / (RRF_K + rank).
 RRF_K = 60
@@ -119,15 +122,21 @@ class VectorRetriever:
 class BM25Retriever:
     """Sparse keyword retrieval via in-memory BM25 indexes, one per chunk size."""
 
-    def __init__(self, conn: sqlite3.Connection, doc_ids: Sequence[str]) -> None:
+    def __init__(
+        self,
+        conn: sqlite3.Connection,
+        doc_ids: Sequence[str],
+        chunk_sizes: Sequence[int] | None = None,
+    ) -> None:
         self._doc_ids = list(doc_ids)
         self._indexes: dict[int, BM25Index] = {}
         self._rows: dict[str, sqlite3.Row] = {}
         if not self._doc_ids:
             return
 
+        sizes = tuple(chunk_sizes) if chunk_sizes is not None else CHUNK_SIZES
         placeholders = ",".join("?" for _ in self._doc_ids)
-        for chunk_size in CHUNK_SIZES:
+        for chunk_size in sizes:
             rows = conn.execute(
                 "SELECT id, document_id, chunk_size, idx, text, start_char, end_char "
                 f"FROM chunks WHERE chunk_size = ? AND document_id IN ({placeholders}) "
@@ -206,16 +215,22 @@ def make_retriever(
     strategy: str,
     conn: sqlite3.Connection,
     doc_ids: Sequence[str],
+    chunk_sizes: Sequence[int] | None = None,
     embed: Embedder = embed_texts,
 ) -> Retriever:
-    """Build the retriever for a strategy, constructing only what it needs."""
+    """Build the retriever for a strategy, constructing only what it needs.
+
+    ``chunk_sizes`` scopes the BM25 index build to the sizes the run's configs
+    actually use (the vector retriever filters by size at query time and needs
+    no such hint); it defaults to the built-in matrix sizes.
+    """
     if strategy == "vector":
         return VectorRetriever(conn, doc_ids, embed)
     if strategy == "bm25":
-        return BM25Retriever(conn, doc_ids)
+        return BM25Retriever(conn, doc_ids, chunk_sizes)
     if strategy == "hybrid":
         return HybridRetriever(
             VectorRetriever(conn, doc_ids, embed),
-            BM25Retriever(conn, doc_ids),
+            BM25Retriever(conn, doc_ids, chunk_sizes),
         )
     raise ValueError(f"Unknown strategy {strategy!r}; expected one of {STRATEGIES}.")

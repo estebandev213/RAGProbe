@@ -32,6 +32,7 @@ from app.db import connect, init_db
 from app.events import EventBus
 from app.main import create_app
 from app.models import (
+    ConfigSpec,
     ConfigSummary,
     QType,
     Question,
@@ -90,6 +91,33 @@ def test_config_matrix_demo_has_two_hybrid_configs() -> None:
     # Demo holds strategy fixed at hybrid, varying only chunk size.
     assert {c.strategy for c in configs} == {"hybrid"}
     assert {c.label for c in configs} == {"400/hybrid", "800/hybrid"}
+
+
+def test_config_matrix_uses_explicit_specs() -> None:
+    specs = [
+        ConfigSpec(chunk_size=256, strategy="vector", top_k=3),
+        ConfigSpec(chunk_size=1024, strategy="bm25", top_k=8),
+    ]
+    configs = build_config_matrix("run1", demo_mode=False, specs=specs)
+    assert [(c.chunk_size, c.strategy, c.top_k) for c in configs] == [
+        (256, "vector", 3),
+        (1024, "bm25", 8),
+    ]
+    assert {c.label for c in configs} == {"256/vector", "1024/bm25"}
+
+
+def test_config_matrix_disambiguates_top_k_collisions() -> None:
+    # Same chunk size + strategy, differing only by top_k, would collide on the
+    # base label; each colliding label gains a top_k suffix so the report and SSE
+    # events can group by label without silently merging configs.
+    specs = [
+        ConfigSpec(chunk_size=400, strategy="hybrid", top_k=5),
+        ConfigSpec(chunk_size=400, strategy="hybrid", top_k=10),
+        ConfigSpec(chunk_size=800, strategy="vector", top_k=5),
+    ]
+    labels = [c.label for c in build_config_matrix("run1", demo_mode=False, specs=specs)]
+    assert labels == ["400/hybrid·k5", "400/hybrid·k10", "800/vector"]
+    assert len(set(labels)) == len(labels)
 
 
 # ---------------------------------------------------------------------------
@@ -298,6 +326,43 @@ async def test_execute_run_completes_and_emits_events(run_db: str) -> None:
     assert any(e.type is RunEventType.PROGRESS and e.done == DEMO_EXAM_SIZE for e in events)
     # The judging phase ran (a phase event for it was emitted).
     assert any(e.type is RunEventType.PHASE and e.phase is RunStatus.JUDGING for e in events)
+
+
+@respx.mock
+async def test_execute_run_indexes_only_requested_chunk_sizes(run_db: str) -> None:
+    """A Sandbox run chunks the docs at exactly its configs' sizes — no others."""
+    _seed_run(run_db)
+    respx.post(URL).mock(side_effect=_groq_handler)
+
+    settings = RunSettings(
+        demo_mode=True,
+        n_questions=DEMO_EXAM_SIZE,
+        top_k=TOP_K,
+        configs=[
+            ConfigSpec(chunk_size=300, strategy="vector", top_k=4),
+            ConfigSpec(chunk_size=700, strategy="bm25", top_k=6),
+        ],
+    )
+
+    async with _client() as client:
+        await execute_run("run1", ["doc1"], settings, embed=_fake_embedder, client=client)
+
+    conn = connect(run_db)
+    try:
+        chunk_sizes = {
+            row[0] for row in conn.execute("SELECT DISTINCT chunk_size FROM chunks").fetchall()
+        }
+        config_rows = conn.execute(
+            "SELECT chunk_size, strategy, top_k FROM configs ORDER BY chunk_size"
+        ).fetchall()
+        n_answers = conn.execute("SELECT COUNT(*) FROM answers").fetchone()[0]
+    finally:
+        conn.close()
+
+    # Only the two requested sizes were chunked/embedded — not the default 400/800.
+    assert chunk_sizes == {300, 700}
+    assert [tuple(row) for row in config_rows] == [(300, "vector", 4), (700, "bm25", 6)]
+    assert n_answers == 2 * DEMO_EXAM_SIZE
 
 
 JUDGE_URL = "https://judge.example.test/v1/chat/completions"
@@ -539,6 +604,125 @@ def test_create_run_returns_backend_resolved_counts(
     body = resp.json()
     assert body["n_questions"] == DEMO_EXAM_SIZE
     assert body["n_configs"] == 2  # two chunk sizes x the demo strategy set
+
+
+def _seed_doc(db_path: str) -> None:
+    conn = connect(db_path)
+    try:
+        conn.execute(
+            "INSERT INTO documents (id, name, mime, text, char_count, created_at) "
+            "VALUES ('doc1', 'd.md', 'text/markdown', 'hello', 5, '2026-06-13')"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_create_run_accepts_custom_configs(
+    api: tuple[TestClient, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An explicit Sandbox matrix drives the resolved config count in the response."""
+
+    async def _noop_run(*args: object, **kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr("app.routes.runs.execute_run", _noop_run)
+    client, db_path = api
+    _seed_doc(db_path)
+
+    resp = client.post(
+        "/api/runs",
+        json={
+            "doc_ids": ["doc1"],
+            "demo_mode": False,
+            "configs": [
+                {"chunk_size": 256, "strategy": "vector", "top_k": 3},
+                {"chunk_size": 512, "strategy": "hybrid", "top_k": 7},
+            ],
+        },
+    )
+    assert resp.status_code == 201
+    assert resp.json()["n_configs"] == 2
+
+
+def test_create_run_rejects_too_many_configs_in_demo(
+    api: tuple[TestClient, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def _noop_run(*args: object, **kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr("app.routes.runs.execute_run", _noop_run)
+    client, db_path = api
+    _seed_doc(db_path)
+
+    configs = [
+        {"chunk_size": 400, "strategy": "hybrid", "top_k": 5},
+        {"chunk_size": 800, "strategy": "hybrid", "top_k": 5},
+        {"chunk_size": 512, "strategy": "vector", "top_k": 5},
+    ]
+    resp = client.post(
+        "/api/runs", json={"doc_ids": ["doc1"], "demo_mode": True, "configs": configs}
+    )
+    assert resp.status_code == 422
+    assert "2 configurations" in resp.json()["detail"]
+
+
+def test_create_run_rejects_too_many_configs_in_full(
+    api: tuple[TestClient, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def _noop_run(*args: object, **kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr("app.routes.runs.execute_run", _noop_run)
+    client, db_path = api
+    _seed_doc(db_path)
+
+    configs = [{"chunk_size": 100 + 100 * i, "strategy": "vector", "top_k": 5} for i in range(5)]
+    resp = client.post(
+        "/api/runs", json={"doc_ids": ["doc1"], "demo_mode": False, "configs": configs}
+    )
+    assert resp.status_code == 422
+    assert "4 configurations" in resp.json()["detail"]
+
+
+def test_create_run_rejects_duplicate_configs(
+    api: tuple[TestClient, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def _noop_run(*args: object, **kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr("app.routes.runs.execute_run", _noop_run)
+    client, db_path = api
+    _seed_doc(db_path)
+
+    dup = {"chunk_size": 400, "strategy": "hybrid", "top_k": 5}
+    resp = client.post(
+        "/api/runs", json={"doc_ids": ["doc1"], "demo_mode": False, "configs": [dup, dup]}
+    )
+    assert resp.status_code == 422
+    assert "Duplicate" in resp.json()["detail"]
+
+
+def test_create_run_rejects_empty_config_list(api: tuple[TestClient, str]) -> None:
+    client, db_path = api
+    _seed_doc(db_path)
+    resp = client.post("/api/runs", json={"doc_ids": ["doc1"], "demo_mode": False, "configs": []})
+    assert resp.status_code == 422
+
+
+def test_create_run_rejects_out_of_bounds_chunk_size(api: tuple[TestClient, str]) -> None:
+    client, db_path = api
+    _seed_doc(db_path)
+    resp = client.post(
+        "/api/runs",
+        json={
+            "doc_ids": ["doc1"],
+            "demo_mode": False,
+            "configs": [{"chunk_size": 50, "strategy": "vector", "top_k": 5}],
+        },
+    )
+    # Below MIN_CHUNK_SIZE — rejected by the ConfigSpec field bound at parse time.
+    assert resp.status_code == 422
 
 
 def test_create_run_rejects_empty_doc_ids(api: tuple[TestClient, str]) -> None:

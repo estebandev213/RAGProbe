@@ -13,6 +13,19 @@ export interface DocumentSummary {
   created_at: string;
 }
 
+/** The retrieval strategies a config may pick (§6.2). Mirrors backend STRATEGIES. */
+export type Strategy = "vector" | "bm25" | "hybrid";
+
+/**
+ * One retrieval configuration to evaluate — the Sandbox unit (§8).
+ * Mirrors the backend `ConfigSpec`; sent on `POST /api/runs` when customizing.
+ */
+export interface ConfigSpec {
+  chunk_size: number;
+  strategy: Strategy;
+  top_k: number;
+}
+
 /** Coarse run lifecycle state, advanced in order by the orchestrator (§6.7). */
 export type RunStatus =
   | "pending"

@@ -21,6 +21,7 @@ import json
 import logging
 import sqlite3
 import uuid
+from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass
 from itertools import product
@@ -42,6 +43,7 @@ from app.core.retrieval import Retriever, build_context, make_retriever
 from app.db import get_db
 from app.events import bus
 from app.models import (
+    ConfigSpec,
     ConfigSummary,
     Question,
     RunEvent,
@@ -60,6 +62,13 @@ TOP_K = 5
 # halving the LLM-call volume to stay well inside free-tier rate limits.
 FULL_STRATEGIES: tuple[str, ...] = ("vector", "bm25", "hybrid")
 DEMO_STRATEGIES: tuple[str, ...] = ("hybrid",)
+
+# Sandbox config-count caps per mode (§8): a run's total LLM calls scale with
+# (questions x configs x metrics), so demo halves the ceiling to stay inside
+# free-tier rate limits. The caps govern *explicit* Sandbox lists only; the
+# derived full matrix is six configs and is not bound by them.
+MAX_CONFIGS_DEMO = 2
+MAX_CONFIGS_FULL = 4
 
 # Strict-grounding system prompt for answer generation (§6.4): the model must
 # abstain rather than draw on parametric knowledge, so abstention is measurable.
@@ -85,23 +94,64 @@ def strategies_for(demo_mode: bool) -> tuple[str, ...]:
     return DEMO_STRATEGIES if demo_mode else FULL_STRATEGIES
 
 
-def build_config_matrix(run_id: str, demo_mode: bool) -> list[ConfigSummary]:
-    """Materialize the ``chunk_size x strategy`` config matrix for a run (§6.2).
+def max_configs(demo_mode: bool) -> int:
+    """How many explicit Sandbox configs a run may request in the given mode (§8)."""
+    return MAX_CONFIGS_DEMO if demo_mode else MAX_CONFIGS_FULL
 
-    Full mode yields six configs, demo mode four; ``top_k`` is fixed at
-    :data:`TOP_K` and ``label`` is the ``"{chunk_size}/{strategy}"`` shown in the
-    report and on progress events.
+
+def derived_specs(demo_mode: bool) -> list[ConfigSpec]:
+    """The default ``chunk_size x strategy`` matrix used when no configs are given.
+
+    This is the zero-config fallback: full mode yields six configs (every chunk
+    size x every strategy), demo mode two (both sizes at the fixed hybrid
+    strategy), all at the default retrieval depth :data:`TOP_K`.
     """
+    return [
+        ConfigSpec(chunk_size=chunk_size, strategy=strategy, top_k=TOP_K)
+        for chunk_size, strategy in product(CHUNK_SIZES, strategies_for(demo_mode))
+    ]
+
+
+def _unique_labels(specs: Sequence[ConfigSpec]) -> list[str]:
+    """Human labels for a config set, disambiguated only where they'd collide.
+
+    The base label is ``"{chunk_size}/{strategy}"``. Two Sandbox configs can share
+    that (same size and strategy, different ``top_k``) — since the report and SSE
+    events group by label, a collision would silently merge them, so colliding
+    labels gain a ``"·k{top_k}"`` suffix. The derived matrix never collides, so it
+    keeps its familiar ``"400/vector"`` labels untouched.
+    """
+    base = [f"{spec.chunk_size}/{spec.strategy}" for spec in specs]
+    counts = Counter(base)
+    return [
+        f"{label}·k{spec.top_k}" if counts[label] > 1 else label
+        for label, spec in zip(base, specs, strict=True)
+    ]
+
+
+def build_config_matrix(
+    run_id: str,
+    demo_mode: bool,
+    specs: Sequence[ConfigSpec] | None = None,
+) -> list[ConfigSummary]:
+    """Materialize a run's config matrix as persistable :class:`ConfigSummary` rows.
+
+    ``specs`` is the explicit Sandbox list; when ``None`` the demo/full matrix is
+    derived from ``demo_mode`` (:func:`derived_specs`). Labels are made unique
+    within the set so the report and progress events can group by them safely.
+    """
+    resolved = list(specs) if specs is not None else derived_specs(demo_mode)
+    labels = _unique_labels(resolved)
     return [
         ConfigSummary(
             id=uuid.uuid4().hex,
             run_id=run_id,
-            chunk_size=chunk_size,
-            strategy=strategy,
-            top_k=TOP_K,
-            label=f"{chunk_size}/{strategy}",
+            chunk_size=spec.chunk_size,
+            strategy=spec.strategy,
+            top_k=spec.top_k,
+            label=label,
         )
-        for chunk_size, strategy in product(CHUNK_SIZES, strategies_for(demo_mode))
+        for spec, label in zip(resolved, labels, strict=True)
     ]
 
 
@@ -311,18 +361,24 @@ async def execute_run(
                 questions = await generate_exam(answerer, run_id, documents, settings.n_questions)
                 insert_questions(conn, questions)
 
+                # Resolve the matrix before indexing: the configs decide which
+                # chunk sizes must be built (Sandbox picks arbitrary sizes), and
+                # only the strategies actually used need retrievers.
+                configs = build_config_matrix(run_id, settings.demo_mode, settings.configs)
+                chunk_sizes = sorted({config.chunk_size for config in configs})
+                strategies = sorted({config.strategy for config in configs})
+
                 _enter_phase(conn, run_id, RunStatus.INDEXING)
                 for document in documents:
                     await asyncio.to_thread(
-                        index_document, conn, document.doc_id, document.text, embed
+                        index_document, conn, document.doc_id, document.text, chunk_sizes, embed
                     )
 
                 _enter_phase(conn, run_id, RunStatus.ANSWERING)
-                configs = build_config_matrix(run_id, settings.demo_mode)
                 insert_configs(conn, configs)
                 retrievers = {
-                    strategy: make_retriever(strategy, conn, doc_ids, embed)
-                    for strategy in strategies_for(settings.demo_mode)
+                    strategy: make_retriever(strategy, conn, doc_ids, chunk_sizes, embed)
+                    for strategy in strategies
                 }
 
                 total = len(questions)

@@ -25,10 +25,18 @@ from fastapi.responses import StreamingResponse
 from app.config import get_settings
 from app.core.chunking import CHUNK_SIZES
 from app.core.exam import exam_size
-from app.core.runner import TOP_K, _delete_run, execute_run, strategies_for
+from app.core.runner import (
+    TOP_K,
+    _delete_run,
+    derived_specs,
+    execute_run,
+    max_configs,
+    strategies_for,
+)
 from app.db import get_connection
 from app.events import bus
 from app.models import (
+    ConfigSpec,
     RunCreate,
     RunCreated,
     RunEvent,
@@ -86,6 +94,9 @@ async def create_run(
 
     app_settings = get_settings()
     demo_mode = body.demo_mode if body.demo_mode is not None else app_settings.demo_mode
+    # Resolve the config matrix: an explicit Sandbox list (validated against the
+    # mode's cap and de-duplicated) or the derived demo/full default.
+    configs = _resolve_configs(body.configs, demo_mode)
     settings = RunSettings(
         demo_mode=demo_mode,
         n_questions=exam_size(demo_mode),
@@ -98,6 +109,7 @@ async def create_run(
             if app_settings.gemini_api_key
             else app_settings.groq_generation_model
         ),
+        configs=configs,
     )
 
     run_id = uuid.uuid4().hex
@@ -114,12 +126,47 @@ async def create_run(
     conn.commit()
 
     _spawn_run(run_id, body.doc_ids, settings)
-    logger.info("run_created", extra={"run_id": run_id, "demo_mode": demo_mode})
+    logger.info(
+        "run_created",
+        extra={"run_id": run_id, "demo_mode": demo_mode, "n_configs": len(configs)},
+    )
     return RunCreated(
         run_id=run_id,
         n_questions=settings.n_questions,
-        n_configs=len(CHUNK_SIZES) * len(strategies_for(demo_mode)),
+        n_configs=len(configs),
     )
+
+
+def _resolve_configs(requested: list[ConfigSpec] | None, demo_mode: bool) -> list[ConfigSpec]:
+    """Validate an explicit Sandbox config list, or derive the default matrix.
+
+    ``None`` → the demo/full default (:func:`derived_specs`). Otherwise the list
+    must be non-empty, within the mode's :func:`max_configs` cap, and free of
+    duplicate configurations (same chunk size / strategy / top-k); each failure
+    is a 422 with an actionable message. Per-field bounds were already enforced
+    when the request body was parsed into :class:`ConfigSpec`.
+    """
+    if requested is None:
+        return derived_specs(demo_mode)
+    if not requested:
+        raise HTTPException(status_code=422, detail="At least one configuration is required.")
+    cap = max_configs(demo_mode)
+    if len(requested) > cap:
+        mode = "demo" if demo_mode else "full"
+        raise HTTPException(
+            status_code=422,
+            detail=f"At most {cap} configurations are allowed in {mode} mode.",
+        )
+    seen: set[tuple[int, str, int]] = set()
+    for spec in requested:
+        if spec.key() in seen:
+            raise HTTPException(
+                status_code=422,
+                detail="Duplicate configuration: each must be a unique chunk size, "
+                "strategy, and top-k combination.",
+            )
+        seen.add(spec.key())
+    return requested
 
 
 def _row_to_summary(row: sqlite3.Row, name_by_id: dict[str, str]) -> RunSummary:
@@ -132,6 +179,13 @@ def _row_to_summary(row: sqlite3.Row, name_by_id: dict[str, str]) -> RunSummary:
     doc_ids = json.loads(row["doc_ids"])
     names = [name_by_id[doc_id] for doc_id in doc_ids if doc_id in name_by_id]
     title = row["title"] or ", ".join(names) or "Untitled evaluation"
+    # New runs persist their resolved matrix; older rows predate it and fall back
+    # to the derived count for their mode.
+    n_configs = (
+        len(settings.configs)
+        if settings.configs is not None
+        else len(CHUNK_SIZES) * len(strategies_for(settings.demo_mode))
+    )
     return RunSummary(
         id=row["id"],
         status=RunStatus(row["status"]),
@@ -142,7 +196,7 @@ def _row_to_summary(row: sqlite3.Row, name_by_id: dict[str, str]) -> RunSummary:
         demo_mode=settings.demo_mode,
         n_documents=len(doc_ids),
         n_questions=settings.n_questions,
-        n_configs=len(CHUNK_SIZES) * len(strategies_for(settings.demo_mode)),
+        n_configs=n_configs,
     )
 
 

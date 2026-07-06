@@ -6,6 +6,7 @@
  */
 
 import type {
+  ConfigSpec,
   DocumentSummary,
   FailuresResponse,
   Grade,
@@ -88,15 +89,25 @@ export async function loadSampleDocuments(): Promise<DocumentSummary[]> {
   return Promise.all(uploads);
 }
 
-/** Create a run over the given documents and start it in the background. */
+/**
+ * Create a run over the given documents and start it in the background.
+ *
+ * When `configs` is provided, the backend evaluates exactly that Sandbox matrix
+ * (§8); when omitted it derives the demo/full default.
+ */
 export async function createRun(
   docIds: string[],
   demoMode: boolean,
+  configs?: ConfigSpec[],
 ): Promise<RunCreated> {
   return request<RunCreated>("/runs", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ doc_ids: docIds, demo_mode: demoMode }),
+    body: JSON.stringify({
+      doc_ids: docIds,
+      demo_mode: demoMode,
+      ...(configs ? { configs } : {}),
+    }),
   });
 }
 

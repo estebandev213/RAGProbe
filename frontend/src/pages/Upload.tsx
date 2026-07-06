@@ -15,15 +15,30 @@ import {
   loadSampleDocuments,
   uploadDocument,
 } from "../api/client";
+import { ConfigEditor } from "../components/ConfigEditor";
 import { DocumentRow } from "../components/DocumentRow";
 import { Dropzone } from "../components/Dropzone";
 import { Switch } from "../components/Switch";
+import { hasDuplicateConfigs } from "../lib/configs";
 import { setActiveRunId } from "../lib/session";
-import type { DocumentSummary } from "../types";
+import type { ConfigSpec, DocumentSummary } from "../types";
 
 const MAX_FILES = 5;
 const MAX_BYTES = 2 * 1024 * 1024;
 const ACCEPTED = new Set(["pdf", "md", "txt"]);
+
+// Config-count caps per mode, mirroring app/core/runner.py. Demo halves the
+// ceiling to keep free-tier LLM-call volume low.
+const MAX_CONFIGS_DEMO = 2;
+const MAX_CONFIGS_FULL = 4;
+
+// Seed matrix the Sandbox editor starts from: mirrors the derived demo default
+// (both chunk sizes at the hybrid strategy). Turning demo off only raises the
+// cap — it never overwrites what the user has already set up.
+const DEFAULT_CONFIGS: ConfigSpec[] = [
+  { chunk_size: 400, strategy: "hybrid", top_k: 5 },
+  { chunk_size: 800, strategy: "hybrid", top_k: 5 },
+];
 
 interface UploadedDoc {
   summary: DocumentSummary;
@@ -41,8 +56,19 @@ export function UploadPage() {
   const navigate = useNavigate();
   const [docs, setDocs] = useState<UploadedDoc[]>([]);
   const [demoMode, setDemoMode] = useState(true);
+  const [configs, setConfigs] = useState<ConfigSpec[]>(DEFAULT_CONFIGS);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const maxConfigs = demoMode ? MAX_CONFIGS_DEMO : MAX_CONFIGS_FULL;
+  const duplicateConfigs = hasDuplicateConfigs(configs);
+
+  // Toggling demo on tightens the cap: trim any excess configurations so the
+  // list can never exceed what the backend will accept for the mode.
+  function changeDemoMode(next: boolean) {
+    setDemoMode(next);
+    if (next) setConfigs((current) => current.slice(0, MAX_CONFIGS_DEMO));
+  }
 
   async function ingest(files: File[]) {
     setError(null);
@@ -117,6 +143,7 @@ export function UploadPage() {
       const { run_id, n_questions, n_configs } = await createRun(
         summaries.map((summary) => summary.id),
         demoMode,
+        configs,
       );
       setActiveRunId(run_id);
       navigate(`/runs/${run_id}`, {
@@ -169,13 +196,13 @@ export function UploadPage() {
               </p>
               <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
                 {demoMode
-                  ? "Runs a reduced exam over a smaller configuration matrix so the evaluation fits free-tier rate limits. Exact counts are shown when the run starts."
-                  : "Runs the full exam across the complete configuration matrix (every chunk size × every retrieval strategy)."}
+                  ? "Runs a reduced exam and caps you at 2 configurations so the evaluation fits free-tier rate limits. Exact counts are shown when the run starts."
+                  : "Runs the full exam and lets you compare up to 4 configurations. Heavier on LLM calls — mind free-tier rate limits."}
               </p>
             </div>
             <Switch
               checked={demoMode}
-              onChange={setDemoMode}
+              onChange={changeDemoMode}
               label="Toggle demo mode"
             />
           </div>
@@ -183,7 +210,7 @@ export function UploadPage() {
           <div>
             <button
               type="button"
-              disabled={busy || docs.length === 0}
+              disabled={busy || docs.length === 0 || duplicateConfigs}
               onClick={run}
               className="flex w-full items-center justify-center gap-2 rounded-xl bg-accent px-6 py-3.5 font-display font-semibold text-white shadow-lg shadow-accent/25 transition hover:bg-accent-fg disabled:cursor-not-allowed disabled:opacity-50"
             >
@@ -191,10 +218,21 @@ export function UploadPage() {
               Run evaluation
             </button>
             <p className="mt-2 text-center text-xs text-slate-400">
-              This will start a new evaluation run
+              {duplicateConfigs
+                ? "Resolve duplicate configurations to continue"
+                : `${configs.length} configuration${configs.length === 1 ? "" : "s"} · ${demoMode ? "demo" : "full"} mode`}
             </p>
           </div>
         </div>
+      </div>
+
+      <div className="mt-6">
+        <ConfigEditor
+          configs={configs}
+          onChange={setConfigs}
+          maxConfigs={maxConfigs}
+          demoMode={demoMode}
+        />
       </div>
 
       <div className="mt-6">

@@ -60,18 +60,22 @@ def index_document(
     conn: sqlite3.Connection,
     document_id: str,
     text: str,
+    chunk_sizes: Sequence[int] | None = None,
     embed: Embedder = embed_texts,
 ) -> int:
-    """Chunk, embed, and store a document at every configured chunk size.
+    """Chunk, embed, and store a document at each requested chunk size.
 
-    Idempotent per document: existing chunks and vectors for ``document_id`` are
-    removed first, so re-indexing replaces rather than duplicates. Returns the
-    total number of chunks stored across all chunk sizes.
+    ``chunk_sizes`` defaults to the built-in matrix sizes (:data:`CHUNK_SIZES`);
+    a Sandbox run passes the distinct sizes its configs actually use, so only
+    those are chunked and embedded. Idempotent per document: existing chunks and
+    vectors for ``document_id`` are removed first, so re-indexing replaces rather
+    than duplicates. Returns the total number of chunks stored across all sizes.
     """
+    sizes = tuple(chunk_sizes) if chunk_sizes is not None else CHUNK_SIZES
     _delete_existing(conn, document_id)
 
     total = 0
-    for chunk_size in CHUNK_SIZES:
+    for chunk_size in sizes:
         chunks = chunk_document(text, chunk_size)
         if not chunks:
             continue

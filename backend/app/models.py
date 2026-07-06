@@ -161,14 +161,55 @@ class RunStatus(StrEnum):
     ERROR = "error"
 
 
+# Retrieval strategies a config may pick (§6.2). Single source of truth: the
+# request validator here and the dispatcher in app.core.retrieval both read it,
+# so the API and the pipeline can never disagree on what's valid.
+STRATEGIES: tuple[str, ...] = ("vector", "bm25", "hybrid")
+
+# Bounds on a Sandbox config's knobs. Chunk size is token-approximate (§6.1):
+# below ~100 chunking degenerates, above ~2000 it blows the answer context
+# budget. top_k is the retrieval depth handed to each question.
+MIN_CHUNK_SIZE, MAX_CHUNK_SIZE = 100, 2000
+MIN_TOP_K, MAX_TOP_K = 1, 20
+
+
+class ConfigSpec(BaseModel):
+    """One retrieval configuration to evaluate: chunk size / strategy / depth.
+
+    In Sandbox mode (§8) the client sends an explicit list of these; when omitted
+    the backend derives the demo/full matrix instead. Bounds are enforced at this
+    boundary so an out-of-range knob is a clean 422, not a failure deep in
+    indexing. Two specs are considered *the same configuration* when all three
+    fields match — the run route rejects duplicates.
+    """
+
+    chunk_size: int = Field(ge=MIN_CHUNK_SIZE, le=MAX_CHUNK_SIZE)
+    strategy: str
+    top_k: int = Field(ge=MIN_TOP_K, le=MAX_TOP_K)
+
+    @field_validator("strategy")
+    @classmethod
+    def _known_strategy(cls, value: str) -> str:
+        if value not in STRATEGIES:
+            raise ValueError(f"strategy must be one of {STRATEGIES}")
+        return value
+
+    def key(self) -> tuple[int, str, int]:
+        """Identity tuple used to detect duplicate configurations."""
+        return (self.chunk_size, self.strategy, self.top_k)
+
+
 class RunSettings(BaseModel):
     """Per-run knobs, serialized into ``runs.settings`` as JSON.
 
-    ``demo_mode`` shrinks both the exam and the config matrix to fit free-tier
-    rate limits; ``n_questions`` and ``top_k`` are resolved from it at run
-    creation so the run is reproducible from its stored settings alone. The
-    model IDs record *which* models produced and graded the run's numbers —
-    without them a stored run is unauditable later.
+    ``demo_mode`` shrinks the exam (fewer questions) and caps how many configs a
+    Sandbox run may request, to fit free-tier rate limits; ``n_questions`` and
+    ``top_k`` are resolved at run creation so the run is reproducible from its
+    stored settings alone. ``configs`` is the concrete evaluated matrix (custom
+    or derived) — persisting it keeps a run self-describing, so history can show
+    its shape without re-deriving. Older rows predate this field and parse with
+    ``None`` (the summary then falls back to the derived count). The model IDs
+    record *which* models produced and graded the numbers.
     """
 
     demo_mode: bool
@@ -176,17 +217,22 @@ class RunSettings(BaseModel):
     top_k: int
     answer_model: str = ""
     judge_model: str = ""
+    configs: list[ConfigSpec] | None = None
 
 
 class RunCreate(BaseModel):
     """Request body for ``POST /api/runs``.
 
     ``demo_mode`` is optional: when omitted it falls back to the application
-    default (``Settings.demo_mode``).
+    default (``Settings.demo_mode``). ``configs`` is the Sandbox matrix (§8) — an
+    explicit list to evaluate; when omitted the backend derives the demo/full
+    matrix, preserving the zero-config default. Its length is capped against the
+    resolved ``demo_mode`` in the route, which is where that mode is finally known.
     """
 
     doc_ids: list[str]
     demo_mode: bool | None = None
+    configs: list[ConfigSpec] | None = None
 
 
 class RunCreated(BaseModel):

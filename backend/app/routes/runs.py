@@ -41,6 +41,7 @@ from app.models import (
     RunCreated,
     RunEvent,
     RunEventType,
+    RunRename,
     RunSettings,
     RunStatus,
     RunStatusResponse,
@@ -253,6 +254,43 @@ async def get_run(
     if row is None:
         raise HTTPException(status_code=404, detail=f"Run {run_id} not found.")
     return _row_to_status(row)
+
+
+@router.patch("/runs/{run_id}", response_model=RunStatusResponse)
+async def rename_run(
+    run_id: str,
+    body: RunRename,
+    conn: Annotated[sqlite3.Connection, Depends(get_connection)],
+) -> RunStatusResponse:
+    """Set a user-chosen title for a run, overriding the AI-generated one."""
+    row = conn.execute(
+        "SELECT id, status, error, created_at, title FROM runs WHERE id = ?",
+        (run_id,),
+    ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"Run {run_id} not found.")
+    conn.execute("UPDATE runs SET title = ? WHERE id = ?", (body.title, run_id))
+    conn.commit()
+    return _row_to_status(row).model_copy(update={"title": body.title})
+
+
+@router.delete("/runs/{run_id}", status_code=204)
+async def delete_run(
+    run_id: str,
+    conn: Annotated[sqlite3.Connection, Depends(get_connection)],
+) -> Response:
+    """Delete a completed run and everything hanging off it.
+
+    Only ``done`` runs reach the history list, so this is the only state this
+    endpoint needs to handle; an in-flight or errored run is torn down by
+    ``cancel_run`` instead.
+    """
+    row = conn.execute("SELECT status FROM runs WHERE id = ?", (run_id,)).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"Run {run_id} not found.")
+    _delete_run(conn, run_id)
+    logger.info("run_deleted", extra={"run_id": run_id})
+    return Response(status_code=204)
 
 
 @router.post("/runs/{run_id}/cancel", status_code=202)

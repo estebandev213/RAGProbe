@@ -126,6 +126,23 @@ export async function getRun(runId: string): Promise<RunStatusResponse> {
   return request<RunStatusResponse>(`/runs/${runId}`);
 }
 
+/** Rename a run, overriding its AI-generated title. */
+export async function renameRun(
+  runId: string,
+  title: string,
+): Promise<RunStatusResponse> {
+  return request<RunStatusResponse>(`/runs/${runId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ title }),
+  });
+}
+
+/** Permanently delete a completed run and everything hanging off it. */
+export async function deleteRun(runId: string): Promise<void> {
+  await request<void>(`/runs/${runId}`, { method: "DELETE" });
+}
+
 /** Fetch a run's aggregated report: leaderboard, breakdown, recommendation. */
 export async function getReport(runId: string): Promise<ReportResponse> {
   return request<ReportResponse>(`/runs/${runId}/report`);

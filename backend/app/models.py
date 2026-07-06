@@ -258,6 +258,24 @@ class RunStatusResponse(BaseModel):
     title: str | None
 
 
+class RunRename(BaseModel):
+    """Request body for ``PATCH /api/runs/{id}``: a user-chosen title override.
+
+    The 80-char cap mirrors the AI-generated title's own limit (§8) so a
+    manual rename can't blow out the history card layout.
+    """
+
+    title: str
+
+    @field_validator("title")
+    @classmethod
+    def _not_blank(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("Title must not be blank.")
+        return stripped[:80]
+
+
 class RunSummary(BaseModel):
     """One run as shown in the history list (``GET /api/runs``), newest first.
 

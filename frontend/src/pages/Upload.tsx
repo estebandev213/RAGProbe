@@ -6,6 +6,7 @@ import {
   Gavel,
   PlayCircle,
   ScrollText,
+  SlidersHorizontal,
   Upload,
 } from "lucide-react";
 import { useState } from "react";
@@ -53,6 +54,41 @@ const STEPS = [
   { icon: Gavel, text: "Grade every answer with an LLM judge" },
   { icon: ClipboardCheck, text: "Get a report with recommendations" },
 ];
+
+// The three graded metrics and their weight in the composite score. Mirrors
+// the weighting in app/core/scoring.py.
+const METRICS = [
+  {
+    weight: "50%",
+    label: "Correctness",
+    detail: "Model answer vs. gold answer, scored by an LLM judge.",
+  },
+  {
+    weight: "30%",
+    label: "Faithfulness",
+    detail: "Every claim in the answer supported by the retrieved context.",
+  },
+  {
+    weight: "20%",
+    label: "Retrieval hit",
+    detail:
+      "Gold span ≥50% overlapped by a retrieved chunk. Pure math, no LLM.",
+  },
+] as const;
+
+// Target mix of auto-generated question types, each stressing a different part
+// of the pipeline. Percentages mirror the exam generator's taxonomy.
+const TAXONOMY = [
+  { label: "Factual", pct: 40, bar: "bg-accent", dot: "bg-accent" },
+  { label: "Multi-hop", pct: 25, bar: "bg-accent/70", dot: "bg-accent/70" },
+  { label: "Paraphrase", pct: 20, bar: "bg-accent/45", dot: "bg-accent/45" },
+  {
+    label: "Unanswerable",
+    pct: 15,
+    bar: "bg-accent/25",
+    dot: "bg-accent/25",
+  },
+] as const;
 
 export function UploadPage() {
   const navigate = useNavigate();
@@ -200,7 +236,7 @@ export function UploadPage() {
           </div>
         </div>
 
-        <ol className="flex items-start gap-4 xl:gap-8">
+        <ol className="flex items-start gap-4 self-center xl:gap-8">
           {STEPS.map((step, index) => {
             const Icon = step.icon;
             return (
@@ -312,7 +348,7 @@ export function UploadPage() {
               />
             </div>
             <div className="flex-1">
-              <p className="font-semibold text-slate-800 dark:text-slate-100">
+              <p className="text-base font-semibold text-slate-800 dark:text-slate-100">
                 Demo mode is {demoMode ? "ON" : "OFF"}
               </p>
               <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
@@ -329,46 +365,76 @@ export function UploadPage() {
           </div>
 
           <div className="card p-5">
-            <p className="font-display font-semibold text-slate-800 dark:text-slate-100">
-              How RAGProbe works
+            <div className="flex items-center gap-2.5">
+              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-accent-soft text-accent dark:bg-accent/10">
+                <SlidersHorizontal size={15} />
+              </span>
+              <p className="font-display text-base font-semibold text-slate-800 dark:text-slate-100">
+                Scoring methodology
+              </p>
+            </div>
+
+            <p className="mt-5 text-xs font-semibold uppercase tracking-wider text-slate-400">
+              Composite score
             </p>
-            <ul className="mt-3 flex flex-col gap-3">
-              <li className="flex items-start gap-3">
-                <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-accent-soft text-accent dark:bg-accent/10">
-                  <ScrollText size={14} />
-                </span>
-                <p className="text-sm text-slate-500 dark:text-slate-400">
-                  Auto-generates a taxonomy exam: factual, multi-hop,
-                  paraphrase, and unanswerable questions.
-                </p>
-              </li>
-              <li className="flex items-start gap-3">
-                <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-accent-soft text-accent dark:bg-accent/10">
-                  <Boxes size={14} />
-                </span>
-                <p className="text-sm text-slate-500 dark:text-slate-400">
-                  Runs every question through each RAG configuration you define.
-                </p>
-              </li>
-              <li className="flex items-start gap-3">
-                <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-accent-soft text-accent dark:bg-accent/10">
-                  <Gavel size={14} />
-                </span>
-                <p className="text-sm text-slate-500 dark:text-slate-400">
-                  An LLM judge scores correctness, faithfulness, and retrieval
-                  hit for every answer.
-                </p>
-              </li>
-              <li className="flex items-start gap-3">
-                <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-accent-soft text-accent dark:bg-accent/10">
-                  <ClipboardCheck size={14} />
-                </span>
-                <p className="text-sm text-slate-500 dark:text-slate-400">
-                  Every grade ships with a rationale you can inspect, and
-                  override, in the report.
-                </p>
-              </li>
+            <ul className="mt-3 flex flex-col gap-4">
+              {METRICS.map((metric, index) => (
+                <li
+                  key={metric.label}
+                  style={{ animationDelay: `${index * 90}ms` }}
+                  className="group flex items-center gap-4 rounded-xl px-2 py-1.5 -mx-2 animate-text-rise transition-colors duration-200 motion-reduce:animate-none hover:bg-accent-soft/60 dark:hover:bg-accent/10"
+                >
+                  <span className="w-14 shrink-0 text-right font-mono text-xl font-bold tabular-nums text-accent transition-transform duration-200 group-hover:scale-110">
+                    {metric.weight}
+                  </span>
+                  <span className="flex-1 pl-4">
+                    <span className="block text-sm font-semibold text-slate-700 dark:text-slate-200">
+                      {metric.label}
+                    </span>
+                    <span className="mt-0.5 block text-xs leading-snug text-slate-500 dark:text-slate-400">
+                      {metric.detail}
+                    </span>
+                  </span>
+                </li>
+              ))}
             </ul>
+
+            <div className="mt-6">
+              <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">
+                Question taxonomy
+              </p>
+              <div className="mt-3 flex h-2.5 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800">
+                {TAXONOMY.map((slice, index) => (
+                  <span
+                    key={slice.label}
+                    style={{
+                      width: `${slice.pct}%`,
+                      animationDelay: `${index * 120}ms`,
+                    }}
+                    className={`origin-left animate-line-grow border-r border-white/40 motion-reduce:animate-none last:border-r-0 dark:border-slate-900/60 ${slice.bar}`}
+                  />
+                ))}
+              </div>
+              <ul className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2.5">
+                {TAXONOMY.map((slice, index) => (
+                  <li
+                    key={slice.label}
+                    style={{ animationDelay: `${index * 90 + 200}ms` }}
+                    className="flex animate-text-rise items-center gap-2 motion-reduce:animate-none"
+                  >
+                    <span
+                      className={`h-2.5 w-2.5 shrink-0 rounded-full ${slice.dot}`}
+                    />
+                    <span className="flex-1 text-xs text-slate-500 dark:text-slate-400">
+                      {slice.label}
+                    </span>
+                    <span className="font-mono text-sm font-bold tabular-nums text-slate-700 dark:text-slate-200">
+                      {slice.pct}%
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
           </div>
         </div>
       </div>

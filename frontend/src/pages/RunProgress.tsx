@@ -1,7 +1,7 @@
 import {
   AlertTriangle,
-  ArrowLeft,
   Ban,
+  Clock3,
   Copy,
   FileText,
   FlaskConical,
@@ -10,13 +10,14 @@ import {
   Wifi,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { cancelRun, getRun, subscribeToRun } from "../api/client";
 import {
   ConfigProgressList,
   type ConfigProgress,
 } from "../components/ConfigProgress";
 import { EventLog, type LogEntry, type LogKind } from "../components/EventLog";
+import { LiveProcess, type TranscriptItem } from "../components/LiveProcess";
 import {
   PhaseTimeline,
   type PhaseState,
@@ -24,6 +25,15 @@ import {
 } from "../components/PhaseTimeline";
 import { StatCard } from "../components/StatCard";
 import { formatClock, formatElapsed, formatNumber } from "../lib/format";
+import {
+  MOCK_RUN_ID,
+  mockConfigs,
+  mockElapsedMs,
+  mockLog,
+  mockPhaseEntry,
+  mockStatus,
+  mockTranscript,
+} from "../lib/mockRun";
 import { clearActiveRunId } from "../lib/session";
 import type { DocumentSummary, RunEvent, RunStatus } from "../types";
 
@@ -87,6 +97,48 @@ function phaseLogLine(event: RunEvent): { text: string; kind: LogKind } | null {
   return null;
 }
 
+/** Map a content-bearing run event to a transcript item, or null if it carries none. */
+function transcriptItem(event: RunEvent, id: number): TranscriptItem | null {
+  if (event.type === "thinking" && event.message) {
+    return { id, kind: "thinking", text: event.message };
+  }
+  if (event.type === "question" && event.question) {
+    const { idx, qtype, text } = event.question;
+    return { id, kind: "question", idx, qtype, text };
+  }
+  if (event.type === "answer" && event.answer && event.config_label) {
+    const a = event.answer;
+    return {
+      id,
+      kind: "answer",
+      configLabel: event.config_label,
+      idx: a.idx,
+      qtype: a.qtype,
+      question: a.question,
+      text: a.text,
+      retrieved: a.retrieved,
+      latencyMs: a.latency_ms,
+      abstained: a.abstained,
+    };
+  }
+  if (event.type === "grade" && event.grade && event.config_label) {
+    const g = event.grade;
+    return {
+      id,
+      kind: "grade",
+      configLabel: event.config_label,
+      idx: g.idx,
+      qtype: g.qtype,
+      correctness: g.correctness,
+      faithfulness: g.faithfulness,
+      retrievalHit: g.retrieval_hit,
+      confidence: g.confidence,
+      rationale: g.rationale,
+    };
+  }
+  return null;
+}
+
 export function RunProgressPage() {
   const { runId = "" } = useParams();
   const navigate = useNavigate();
@@ -96,6 +148,8 @@ export function RunProgressPage() {
   const [error, setError] = useState<string | null>(null);
   const [connected, setConnected] = useState(false);
   const [configs, setConfigs] = useState<ConfigProgress[]>([]);
+  const [liveConfigLabel, setLiveConfigLabel] = useState<string | null>(null);
+  const [transcript, setTranscript] = useState<TranscriptItem[]>([]);
   const [log, setLog] = useState<LogEntry[]>([]);
   const [elapsed, setElapsed] = useState(0);
   const [phaseEntry, setPhaseEntry] = useState<Record<string, number>>({});
@@ -106,6 +160,7 @@ export function RunProgressPage() {
 
   const startMsRef = useRef<number>(0);
   const logIdRef = useRef(0);
+  const itemIdRef = useRef(0);
   // Timestamp of the last progress event; drives the stall watchdog below.
   const lastEventMsRef = useRef<number>(0);
   // The live EventSource, so the cancel handler can close it before the backend
@@ -124,9 +179,9 @@ export function RunProgressPage() {
     setLog((current) => [...current, entry].slice(-200));
   }, []);
 
-  // Seed the log.
+  // Seed the log. (The static mock run seeds its own log directly below.)
   useEffect(() => {
-    if (!runId) return;
+    if (!runId || runId === MOCK_RUN_ID) return;
     pushLog("Run created", "info");
     if (navState.demoMode !== undefined) {
       pushLog(
@@ -147,7 +202,27 @@ export function RunProgressPage() {
     lastEventMsRef.current = Date.now();
     cancellingRef.current = false;
     autoCancelRef.current = false;
+    itemIdRef.current = 0;
+    setTranscript([]);
     setStartedLabel(formatClock(new Date(startMsRef.current)));
+
+    // The static preview run: skip the backend entirely and render fixed
+    // sample data, so the transcript/progress styling can be iterated on
+    // locally without a Groq key or a real upload.
+    if (runId === MOCK_RUN_ID) {
+      startMsRef.current = Date.now() - mockElapsedMs;
+      setStartedLabel(formatClock(new Date(startMsRef.current)));
+      itemIdRef.current = mockTranscript.length;
+      setStatus(mockStatus);
+      setConfigs(mockConfigs);
+      setPhaseEntry(mockPhaseEntry);
+      setTranscript(mockTranscript);
+      setLog(mockLog);
+      setConnected(true);
+      return () => {
+        active = false;
+      };
+    }
 
     // Progress is only shown for a run that is actively processing. The snapshot
     // decides: a finished run hands off to its report, a failed/unknown one (a
@@ -176,6 +251,8 @@ export function RunProgressPage() {
         if (snapshot.error) setError(snapshot.error);
       })
       .catch(() => {
+        // No real run behind this id (a failed run is deleted, so its snapshot
+        // 404s) — return to upload rather than render a dead progress screen.
         if (active) navigate("/", { replace: true });
       });
 
@@ -207,6 +284,7 @@ export function RunProgressPage() {
         const label = event.config_label;
         const done = event.done ?? 0;
         const total = event.total ?? 0;
+        setLiveConfigLabel(label);
         setConfigs((current) => {
           const existing = current.find((config) => config.label === label);
           if (existing) {
@@ -233,6 +311,14 @@ export function RunProgressPage() {
       } else if (event.type === "error") {
         setStatus("error");
         setError(event.message ?? "The run failed.");
+      }
+
+      // Content events feed the live transcript (the phase/progress events above
+      // still drive the timeline and per-config bars).
+      const item = transcriptItem(event, itemIdRef.current);
+      if (item) {
+        itemIdRef.current += 1;
+        setTranscript((current) => [...current, item].slice(-800));
       }
     }
 
@@ -264,19 +350,23 @@ export function RunProgressPage() {
     setCancelling(true);
     sourceRef.current?.close();
     clearActiveRunId();
-    try {
-      await cancelRun(runId);
-    } catch {
-      // Ignore: the run is being abandoned regardless.
+    if (runId !== MOCK_RUN_ID) {
+      try {
+        await cancelRun(runId);
+      } catch {
+        // Ignore: the run is being abandoned regardless.
+      }
     }
     navigate("/", { replace: true });
   }, [runId, navigate]);
 
   // Stall watchdog: when the progress stream goes silent past the thresholds,
   // warn, then auto-cancel once. Catches both a free-tier crawl and an orphaned
-  // run left by a restarted worker (which will never publish again).
+  // run left by a restarted worker (which will never publish again). The mock
+  // run never emits events, so it's exempt — otherwise it would auto-cancel
+  // itself a few minutes after opening.
   useEffect(() => {
-    if (terminal) return;
+    if (terminal || runId === MOCK_RUN_ID) return;
     const id = window.setInterval(() => {
       const silent = Date.now() - lastEventMsRef.current;
       setStalled(silent >= STALL_WARN_MS);
@@ -286,7 +376,7 @@ export function RunProgressPage() {
       }
     }, 1000);
     return () => window.clearInterval(id);
-  }, [terminal, cancelRunNow]);
+  }, [terminal, runId, cancelRunNow]);
 
   // On success, hand off to the report card. `replace` keeps the now-finished
   // progress URL out of history.
@@ -382,79 +472,86 @@ export function RunProgressPage() {
           };
 
   return (
-    <div className="animate-fade-in">
-      <Link
-        to="/"
-        className="inline-flex items-center gap-1.5 text-sm font-medium text-accent hover:underline"
-      >
-        <ArrowLeft size={16} /> Back to upload
-      </Link>
-
-      <div className="mt-4 flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <h1 className="font-display text-4xl font-bold tracking-tight text-slate-900 dark:text-white">
-            Run progress
-          </h1>
-          <div className="mt-2 flex items-center gap-3 text-sm text-slate-500 dark:text-slate-400">
-            <span>
-              Run ID:{" "}
-              <span className="font-mono text-slate-700 dark:text-slate-200">
-                {runId}
-              </span>
-            </span>
-            <button
-              type="button"
-              aria-label="Copy run id"
-              onClick={() => navigator.clipboard?.writeText(runId)}
-              className="text-slate-400 transition hover:text-slate-700 dark:hover:text-slate-200"
-            >
-              <Copy size={15} />
-            </button>
-            {navState.demoMode && (
-              <span className="rounded-full bg-accent-soft px-2.5 py-0.5 text-xs font-medium text-accent">
-                Demo mode
-              </span>
-            )}
-          </div>
-
-          {!terminal &&
-            (confirmingCancel ? (
-              <div className="mt-4 flex flex-wrap items-center gap-2">
-                <span className="text-sm text-slate-500 dark:text-slate-400">
-                  Cancel this run? It will be discarded.
+    // Fits the whole page into one viewport: height is 100vh minus exactly the
+    // Layout shell's own vertical padding (pt-10/pb-6 → sm:pt-14 → lg:pt-20/pb-8),
+    // so nothing here ever forces the page itself to scroll. Sections above the
+    // grid keep their natural height (shrink-0); the grid takes whatever is left
+    // (flex-1 min-h-0) and its panels scroll internally instead.
+    <div className="flex h-[calc(100vh-4rem)] flex-col overflow-hidden animate-fade-in sm:h-[calc(100vh-5rem)] lg:h-[calc(100vh-7rem)]">
+      <div className="flex shrink-0 flex-wrap items-start justify-between gap-4">
+        <div className="flex items-start gap-4">
+          <Clock3
+            size={42}
+            strokeWidth={1.8}
+            className="mt-1 shrink-0 text-accent dark:text-white"
+          />
+          <div>
+            <h1 className="font-display text-4xl font-bold tracking-tight text-slate-900 dark:text-white">
+              Run progress
+            </h1>
+            <div className="mt-3 flex flex-wrap items-center gap-3 text-sm text-slate-500 dark:text-slate-400">
+              <span>
+                Run ID:{" "}
+                <span className="font-mono text-slate-700 dark:text-slate-200">
+                  {runId}
                 </span>
-                <button
-                  type="button"
-                  onClick={() => void cancelRunNow()}
-                  disabled={cancelling}
-                  className="inline-flex items-center gap-1.5 rounded-lg bg-red-500 px-3 py-1.5 text-sm font-semibold text-white shadow-sm transition hover:bg-red-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500 focus-visible:ring-offset-2 focus-visible:ring-offset-white disabled:opacity-60 dark:focus-visible:ring-offset-slate-900"
-                >
-                  <Ban size={15} /> Confirm cancel
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setConfirmingCancel(false)}
-                  disabled={cancelling}
-                  className="rounded-lg px-3 py-1.5 text-sm font-medium text-slate-500 transition hover:text-slate-700 disabled:opacity-60 dark:text-slate-400 dark:hover:text-slate-200"
-                >
-                  Keep running
-                </button>
-              </div>
-            ) : (
+              </span>
               <button
                 type="button"
-                onClick={() => setConfirmingCancel(true)}
-                className="mt-4 inline-flex items-center gap-1.5 rounded-lg border border-red-300 bg-white px-3 py-1.5 text-sm font-medium text-red-600 shadow-sm transition hover:bg-red-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:border-red-500/40 dark:bg-slate-800 dark:text-red-400 dark:hover:bg-red-500/10 dark:focus-visible:ring-offset-slate-900"
+                aria-label="Copy run id"
+                onClick={() => navigator.clipboard?.writeText(runId)}
+                className="text-slate-400 transition hover:text-slate-700 dark:hover:text-slate-200"
               >
-                <Ban size={15} /> Cancel run
+                <Copy size={15} />
               </button>
-            ))}
+              {navState.demoMode && (
+                <span className="rounded-full bg-accent-soft px-2.5 py-0.5 text-xs font-medium text-accent">
+                  Demo mode
+                </span>
+              )}
+              {!terminal && !confirmingCancel && (
+                <button
+                  type="button"
+                  onClick={() => setConfirmingCancel(true)}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-red-300 bg-white px-2.5 py-1 text-xs font-medium text-red-600 shadow-sm transition hover:bg-red-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:border-red-500/40 dark:bg-slate-800 dark:text-red-400 dark:hover:bg-red-500/10 dark:focus-visible:ring-offset-slate-900"
+                >
+                  <Ban size={13} /> Cancel run
+                </button>
+              )}
+            </div>
+
+            {!terminal && confirmingCancel && (
+              <div className="mt-3 flex flex-col items-start gap-2">
+                <span className="text-sm text-slate-500 dark:text-slate-400">
+                  Discard this run?
+                </span>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void cancelRunNow()}
+                    disabled={cancelling}
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-red-500 px-2.5 py-1 text-xs font-semibold text-white shadow-sm transition hover:bg-red-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500 focus-visible:ring-offset-2 focus-visible:ring-offset-white disabled:opacity-60 dark:focus-visible:ring-offset-slate-900"
+                  >
+                    <Ban size={13} /> Confirm
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setConfirmingCancel(false)}
+                    disabled={cancelling}
+                    className="rounded-lg px-2 py-1 text-xs font-medium text-slate-500 transition hover:text-slate-700 disabled:opacity-60 dark:text-slate-400 dark:hover:text-slate-200"
+                  >
+                    Keep running
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
 
         <div className="flex flex-wrap gap-3">
           <div className="card flex min-w-[190px] items-center gap-3.5 px-4 py-3">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-accent-soft text-accent dark:bg-accent/10">
-              <Timer size={18} />
+            <div className="flex shrink-0 items-center justify-center text-accent">
+              <Timer size={32} />
             </div>
             <div>
               <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
@@ -467,23 +564,20 @@ export function RunProgressPage() {
             </div>
           </div>
           <div className="card flex min-w-[190px] items-center gap-3.5 px-4 py-3">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-accent-soft text-accent dark:bg-accent/10">
-              <Wifi size={18} />
+            <div className="relative flex shrink-0 items-center justify-center text-accent">
+              <Wifi size={32} />
+              <span className="absolute -bottom-0.5 -right-0.5 flex h-2.5 w-2.5">
+                {connection.live && (
+                  <span
+                    className={`absolute inline-flex h-full w-full animate-ping rounded-full opacity-75 motion-reduce:hidden ${connection.dot}`}
+                  />
+                )}
+                <span
+                  className={`relative inline-flex h-2.5 w-2.5 rounded-full ring-2 ring-white dark:ring-slate-900 ${connection.dot}`}
+                />
+              </span>
             </div>
             <div className="min-w-0">
-              <p className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
-                <span className="relative flex h-2 w-2">
-                  {connection.live && (
-                    <span
-                      className={`absolute inline-flex h-full w-full animate-ping rounded-full opacity-75 motion-reduce:hidden ${connection.dot}`}
-                    />
-                  )}
-                  <span
-                    className={`relative inline-flex h-2 w-2 rounded-full ${connection.dot}`}
-                  />
-                </span>
-                Connection
-              </p>
               <p className="font-semibold leading-tight text-slate-800 dark:text-slate-100">
                 {connection.title}
               </p>
@@ -498,7 +592,7 @@ export function RunProgressPage() {
       {stalled && !terminal && (
         <div
           role="status"
-          className="mt-6 flex items-start gap-3 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm dark:border-amber-500/30 dark:bg-amber-500/10"
+          className="mt-4 flex shrink-0 items-start gap-3 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm dark:border-amber-500/30 dark:bg-amber-500/10"
         >
           <AlertTriangle
             size={18}
@@ -507,7 +601,7 @@ export function RunProgressPage() {
           <div className="text-amber-800 dark:text-amber-300">
             <p className="font-semibold">This run appears stalled.</p>
             <p className="text-amber-700/90 dark:text-amber-300/80">
-              No progress has arrived in a while — it may be throttled by the
+              No progress has arrived in a while, it may be throttled by the
               free tier, or the worker may have stopped. It will auto-cancel if
               this continues, or you can cancel it now and start over.
             </p>
@@ -515,10 +609,10 @@ export function RunProgressPage() {
         </div>
       )}
 
-      {error ? (
+      {error && (
         <div
           role="alert"
-          className="mt-6 flex items-start gap-3 rounded-xl border border-red-200 bg-red-50 p-4 dark:border-red-900/50 dark:bg-red-950/40"
+          className="mt-4 flex shrink-0 items-start gap-3 rounded-xl border border-red-200 bg-red-50 p-4 dark:border-red-900/50 dark:bg-red-950/40"
         >
           <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-red-100 text-red-600 dark:bg-red-900/50">
             <FlaskConical size={20} />
@@ -530,77 +624,70 @@ export function RunProgressPage() {
             <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
           </div>
         </div>
-      ) : (
-        <div className="card mt-6 flex items-center gap-3 p-5">
-          <div className="flex h-14 w-14 shrink-0 items-center justify-center text-accent">
-            <FlaskConical
-              size={30}
-              strokeWidth={1.75}
-              className="animate-float-soft motion-reduce:animate-none"
-            />
-          </div>
-          <div>
-            <p className="font-semibold text-slate-800 dark:text-slate-100">
-              {terminal ? "Evaluation complete" : "Evaluation in progress"}
-            </p>
-            <p className="text-sm text-slate-500 dark:text-slate-400">
-              {terminal
-                ? "Opening the report card…"
-                : "RAGProbe is running each configuration against every question. You'll be taken to the report when it finishes."}
-            </p>
-          </div>
-        </div>
       )}
 
-      <div className="mt-6 grid gap-3 sm:grid-cols-3">
-        <StatCard
-          icon={
-            <FileText
-              size={28}
-              strokeWidth={1.75}
-              className="animate-float-soft motion-reduce:animate-none"
-            />
-          }
-          label="Documents"
-          value={
-            docCount > 0
-              ? `${docCount} files · ${formatNumber(totalChars)} characters`
-              : "—"
-          }
-        />
-        <StatCard
-          icon={
-            <FlaskConical
-              size={28}
-              strokeWidth={1.75}
-              className="animate-float-soft motion-reduce:animate-none [animation-delay:1.2s]"
-            />
-          }
-          label="Exam"
-          value={
-            totalQuestions > 0 ? `${totalQuestions} questions · 4 types` : "—"
-          }
-        />
-        <StatCard
-          icon={
-            <Layers
-              size={28}
-              strokeWidth={1.75}
-              className="animate-float-soft motion-reduce:animate-none [animation-delay:2.4s]"
-            />
-          }
-          label="Configurations"
-          value={configCount > 0 ? `${configCount} configurations` : "—"}
-        />
-      </div>
+      <div className="mt-4 grid min-h-0 flex-1 gap-3 lg:grid-cols-[1fr_1.35fr]">
+        <div className="flex min-h-0 min-w-0 flex-col gap-3">
+          <ConfigProgressList
+            configs={configs}
+            liveLabel={terminal ? null : liveConfigLabel}
+          />
+          <EventLog entries={log} onClear={() => setLog([])} />
+        </div>
 
-      <div className="card mt-6 p-6">
-        <PhaseTimeline phases={phaseViews} />
-      </div>
+        <div className="flex min-h-0 min-w-0 flex-col gap-3">
+          <div className="card shrink-0 px-4 pb-5">
+            <div className="grid gap-2 sm:grid-cols-3">
+              <StatCard
+                icon={
+                  <FileText
+                    size={28}
+                    strokeWidth={1.75}
+                    className="animate-float-soft motion-reduce:animate-none"
+                  />
+                }
+                label="Documents"
+                value={
+                  docCount > 0
+                    ? `${docCount} files · ${formatNumber(totalChars)} characters`
+                    : "—"
+                }
+              />
+              <StatCard
+                icon={
+                  <FlaskConical
+                    size={28}
+                    strokeWidth={1.75}
+                    className="animate-float-soft motion-reduce:animate-none [animation-delay:1.2s]"
+                  />
+                }
+                label="Exam"
+                value={
+                  totalQuestions > 0
+                    ? `${totalQuestions} questions · 4 types`
+                    : "—"
+                }
+              />
+              <StatCard
+                icon={
+                  <Layers
+                    size={28}
+                    strokeWidth={1.75}
+                    className="animate-float-soft motion-reduce:animate-none [animation-delay:2.4s]"
+                  />
+                }
+                label="Configurations"
+                value={configCount > 0 ? `${configCount} configurations` : "—"}
+              />
+            </div>
 
-      <div className="mt-6 grid gap-6 lg:grid-cols-[1.3fr_1fr]">
-        <ConfigProgressList configs={configs} totalQuestions={totalQuestions} />
-        <EventLog entries={log} onClear={() => setLog([])} />
+            <div className="mt-5">
+              <PhaseTimeline phases={phaseViews} />
+            </div>
+          </div>
+
+          <LiveProcess items={transcript} active={!terminal} />
+        </div>
       </div>
     </div>
   );

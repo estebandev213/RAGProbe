@@ -1,5 +1,5 @@
 import { Trophy } from "lucide-react";
-import { formatScore, strategyDetail } from "../lib/format";
+import { formatScore } from "../lib/format";
 import type { ConfigScore } from "../types";
 
 /**

@@ -327,6 +327,21 @@ async def test_execute_run_completes_and_emits_events(run_db: str) -> None:
     # The judging phase ran (a phase event for it was emitted).
     assert any(e.type is RunEventType.PHASE and e.phase is RunStatus.JUDGING for e in events)
 
+    # The live-transcript content events accompany the coarse progress ones: a
+    # running "thinking" narration, one question per drafted exam item, one
+    # answer per (config x question), and one graded verdict per answer.
+    assert RunEventType.THINKING in types
+    questions = [e for e in events if e.type is RunEventType.QUESTION]
+    answers = [e for e in events if e.type is RunEventType.ANSWER]
+    grades = [e for e in events if e.type is RunEventType.GRADE]
+    assert len(questions) == DEMO_EXAM_SIZE
+    assert len(answers) == 2 * DEMO_EXAM_SIZE
+    assert len(grades) == n_answers
+    # Payloads are fully populated and carry the turn's identity (config + question).
+    assert all(e.question is not None and e.question.text for e in questions)
+    assert all(e.answer is not None and e.config_label and e.answer.question for e in answers)
+    assert all(e.grade is not None and e.config_label for e in grades)
+
 
 @respx.mock
 async def test_execute_run_indexes_only_requested_chunk_sizes(run_db: str) -> None:

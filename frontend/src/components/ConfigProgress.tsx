@@ -1,4 +1,4 @@
-import { ChevronRight } from "lucide-react";
+import { ChevronRight, SlidersHorizontal } from "lucide-react";
 import { parseConfigLabel } from "../lib/format";
 
 export interface ConfigProgress {
@@ -44,9 +44,11 @@ const PALETTE = [
 function ConfigRow({
   config,
   index,
+  live,
 }: {
   config: ConfigProgress;
   index: number;
+  live: boolean;
 }) {
   const color = PALETTE[index % PALETTE.length];
   const { chunkSize, strategy, overlap } = parseConfigLabel(config.label);
@@ -54,11 +56,19 @@ function ConfigRow({
     config.total > 0 ? Math.round((config.done / config.total) * 100) : 0;
 
   return (
-    <div className="flex items-center gap-4 py-3">
-      <div
-        className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg font-mono text-sm font-semibold ${color.badge}`}
-      >
-        {index + 1}
+    <div className="flex animate-text-rise items-center gap-4 py-3">
+      <div className="relative shrink-0">
+        {live && (
+          <span
+            aria-hidden
+            className="absolute -inset-1 rounded-xl bg-accent/15 blur-sm motion-reduce:hidden"
+          />
+        )}
+        <div
+          className={`relative flex h-9 w-9 items-center justify-center rounded-lg font-mono text-sm font-semibold ${color.badge}`}
+        >
+          {index + 1}
+        </div>
       </div>
       <div className="w-44 shrink-0">
         <p className="truncate font-medium text-slate-800 dark:text-slate-100">
@@ -90,43 +100,51 @@ function ConfigRow({
 /** The "Configurations progress" panel: one bar per config in the matrix. */
 export function ConfigProgressList({
   configs,
-  totalQuestions,
+  liveLabel,
 }: {
   configs: ConfigProgress[];
-  totalQuestions: number;
+  /** Label of the config that most recently received a progress update — its
+   * badge gets a brief glow to signal "this one's live" (bounded to one at a
+   * time so a fast-moving run never lights up more than a single badge). */
+  liveLabel?: string | null;
 }) {
   return (
-    <div className="card p-5">
-      <h2 className="font-display text-base font-semibold text-slate-800 dark:text-slate-100">
-        Configurations progress
-      </h2>
-
-      {/* Column headers mirror the ConfigRow grid so labels sit above their columns. */}
-      <div className="mt-3 flex items-center gap-4 text-xs font-medium uppercase tracking-wide text-slate-400">
-        <div className="w-9 shrink-0" aria-hidden />
-        <span className="w-44 shrink-0">Configuration</span>
-        <span className="flex-1">Progress</span>
-        <span className="w-24 shrink-0 text-right">Questions</span>
-        <span className="w-[18px] shrink-0" aria-hidden />
-      </div>
-
-      <div className="mt-1 divide-y divide-slate-100 dark:divide-slate-800">
-        {configs.length === 0 ? (
-          <p className="py-6 text-center text-sm text-slate-400">
-            Waiting for the answering phase to begin…
+    <div className="card flex min-h-0 flex-1 flex-col overflow-hidden">
+      <div className="flex shrink-0 items-center gap-3 border-b border-slate-100 px-5 py-4 dark:border-slate-800">
+        <span className="flex h-10 w-10 shrink-0 items-center justify-center text-accent">
+          <SlidersHorizontal size={28} strokeWidth={1.8} />
+        </span>
+        <div className="min-w-0">
+          <h2 className="font-display text-base font-semibold text-slate-800 dark:text-slate-100">
+            Configurations progress
+          </h2>
+          <p className="mt-0.5 truncate font-mono text-[11px] text-slate-400">
+            {configs.length} configuration{configs.length === 1 ? "" : "s"} in
+            matrix
           </p>
-        ) : (
-          configs.map((config, index) => (
-            <ConfigRow key={config.label} config={config} index={index} />
-          ))
-        )}
+        </div>
       </div>
 
-      {totalQuestions > 0 && (
-        <p className="mt-3 text-center text-xs text-slate-400">
-          Each configuration will answer all {totalQuestions} questions
-        </p>
-      )}
+      <div className="flex min-h-0 flex-1 flex-col px-5 pb-5">
+        {/* Scrolls internally (rather than growing the card) once there are more
+          configs than the panel's share of the page has room for. */}
+        <div className="fancy-scrollbar min-h-0 flex-1 divide-y divide-slate-100 overflow-y-auto pt-2 dark:divide-slate-800">
+          {configs.length === 0 ? (
+            <p className="py-6 text-center text-sm text-slate-400">
+              Waiting for the answering phase to begin…
+            </p>
+          ) : (
+            configs.map((config, index) => (
+              <ConfigRow
+                key={config.label}
+                config={config}
+                index={index}
+                live={config.label === liveLabel}
+              />
+            ))
+          )}
+        </div>
+      </div>
     </div>
   );
 }

@@ -7,17 +7,11 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ApiRequestError, getFailures, overrideGrade } from "../api/client";
+import { CONFIDENCE_STYLE } from "../lib/confidence";
 import { configColor } from "../lib/configColors";
 import { formatScore } from "../lib/format";
 import { QTYPE_LABEL, QTYPE_ORDER } from "../lib/qtype";
-import type { ConfigScore, FailureRow, JudgeConfidence, QType } from "../types";
-
-const CONFIDENCE_STYLE: Record<JudgeConfidence, string> = {
-  low: "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300",
-  medium:
-    "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300",
-  high: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300",
-};
+import type { ConfigScore, FailureRow, QType } from "../types";
 
 const SCORE_OPTIONS = [0, 0.5, 1];
 

@@ -66,6 +66,18 @@ class QType(StrEnum):
     UNANSWERABLE = "unanswerable"
 
 
+class JudgeConfidence(StrEnum):
+    """How sure the judge is of its verdict; surfaced in the report (§6.5).
+
+    Defined here (rather than beside the other grading models) so the live
+    progress payloads below can carry it without a forward reference.
+    """
+
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+
+
 class GeneratedQuestion(BaseModel):
     """One question as returned by the generation model (pre-span-location).
 
@@ -312,13 +324,66 @@ class ConfigSummary(BaseModel):
 
 
 class RunEventType(StrEnum):
-    """The kinds of event the run orchestrator publishes over SSE (§6.7)."""
+    """The kinds of event the run orchestrator publishes over SSE (§6.7).
+
+    The first five are the coarse *status* events that drive the phase timeline
+    and per-config progress bars. The last four carry real *content* — the
+    running agent's narration and the actual questions, answers, and verdicts —
+    so the run can be watched as a live transcript, not just a progress bar.
+    """
 
     PHASE = "phase"
     PROGRESS = "progress"
     CONFIG_DONE = "config_done"
     RUN_DONE = "run_done"
     ERROR = "error"
+    THINKING = "thinking"
+    QUESTION = "question"
+    ANSWER = "answer"
+    GRADE = "grade"
+
+
+class QuestionPayload(BaseModel):
+    """One exam question as it is drafted, for the live transcript."""
+
+    idx: int
+    qtype: QType
+    text: str
+
+
+class AnswerPayload(BaseModel):
+    """One configuration's answer to a question, streamed as it lands.
+
+    Carries the question alongside the answer so a turn renders self-contained
+    (no need to cross-reference an earlier ``question`` event). ``retrieved`` is
+    the number of chunks fed to the model; ``abstained`` flags a NOT_IN_DOCUMENTS
+    reply so the UI can style the honesty of an abstention distinctly.
+    """
+
+    idx: int
+    qtype: QType
+    question: str
+    text: str
+    retrieved: int
+    latency_ms: int
+    abstained: bool
+
+
+class GradePayload(BaseModel):
+    """The judge's verdict for one answer, streamed as grading proceeds.
+
+    Keyed to its turn by the enclosing event's ``config_label`` plus ``idx``.
+    ``retrieval_hit`` is ``None`` for unanswerable questions (excluded from that
+    metric, §6.5).
+    """
+
+    idx: int
+    qtype: QType
+    correctness: float
+    faithfulness: float
+    retrieval_hit: float | None
+    confidence: JudgeConfidence
+    rationale: str
 
 
 class RunEvent(BaseModel):
@@ -326,7 +391,9 @@ class RunEvent(BaseModel):
 
     Fields beyond ``type`` are optional and populated per event kind: ``phase``
     on lifecycle transitions; ``config_label``/``done``/``total`` on answering
-    progress; ``message`` on errors and human-readable notes.
+    progress; ``message`` on errors, human-readable notes, and ``thinking``
+    narration; and one of ``question``/``answer``/``grade`` carries the content
+    for the matching live-transcript event.
     """
 
     type: RunEventType
@@ -335,6 +402,9 @@ class RunEvent(BaseModel):
     done: int | None = None
     total: int | None = None
     message: str | None = None
+    question: QuestionPayload | None = None
+    answer: AnswerPayload | None = None
+    grade: GradePayload | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -354,14 +424,6 @@ def _snap_score(value: float) -> float:
     repair round, while still confining grades to the {0, 0.5, 1} scale.
     """
     return min(VALID_SCORES, key=lambda valid: abs(valid - value))
-
-
-class JudgeConfidence(StrEnum):
-    """How sure the judge is of its verdict; surfaced in the report (§6.5)."""
-
-    LOW = "low"
-    MEDIUM = "medium"
-    HIGH = "high"
 
 
 class JudgeVerdict(BaseModel):

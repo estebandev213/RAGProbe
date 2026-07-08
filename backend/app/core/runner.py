@@ -43,9 +43,13 @@ from app.core.retrieval import Retriever, build_context, make_retriever
 from app.db import get_db
 from app.events import bus
 from app.models import (
+    NOT_IN_DOCUMENTS,
+    AnswerPayload,
     ConfigSpec,
     ConfigSummary,
+    GradePayload,
     Question,
+    QuestionPayload,
     RunEvent,
     RunEventType,
     RunSettings,
@@ -232,8 +236,18 @@ async def judge_answers(
     event per answer so the UI can show the judging phase advancing.
     """
     questions_by_id = {question.id: question for question in questions}
+    # 1-based position of each question in the exam, so a grade event can name the
+    # same turn ("Q3") the answering phase used.
+    idx_by_qid = {question.id: idx for idx, question in enumerate(questions, start=1)}
+    labels_by_cid = {
+        row["id"]: row["label"]
+        for row in conn.execute(
+            "SELECT id, label FROM configs WHERE run_id = ?", (run_id,)
+        ).fetchall()
+    }
     rows = conn.execute(
-        "SELECT id, question_id, answer_text, retrieved_chunk_ids FROM answers WHERE run_id = ?",
+        "SELECT id, config_id, question_id, answer_text, retrieved_chunk_ids "
+        "FROM answers WHERE run_id = ?",
         (run_id,),
     ).fetchall()
 
@@ -249,6 +263,26 @@ async def judge_answers(
             json.loads(row["retrieved_chunk_ids"]),
         )
         insert_grade(conn, grade)
+        # Content event → the judge's verdict lands on its transcript turn; the
+        # progress event (kept) advances the judging counter.
+        bus.publish(
+            run_id,
+            RunEvent(
+                type=RunEventType.GRADE,
+                config_label=labels_by_cid.get(row["config_id"]),
+                done=done,
+                total=total,
+                grade=GradePayload(
+                    idx=idx_by_qid[row["question_id"]],
+                    qtype=question.qtype,
+                    correctness=grade.correctness,
+                    faithfulness=grade.faithfulness,
+                    retrieval_hit=grade.retrieval_hit,
+                    confidence=grade.judge_confidence,
+                    rationale=grade.judge_rationale,
+                ),
+            ),
+        )
         bus.publish(
             run_id,
             RunEvent(
@@ -280,6 +314,16 @@ def _enter_phase(conn: sqlite3.Connection, run_id: str, status: RunStatus) -> No
     conn.execute("UPDATE runs SET status = ? WHERE id = ?", (status.value, run_id))
     conn.commit()
     bus.publish(run_id, RunEvent(type=RunEventType.PHASE, phase=status))
+
+
+def _think(run_id: str, message: str, phase: RunStatus | None = None) -> None:
+    """Publish a ``thinking`` narration line for the live transcript (§6.7).
+
+    Purely cosmetic — it carries no state and is never persisted — but it is what
+    keeps the run from going dark between the heavier content events, giving the
+    progress screen its running "thinking…" commentary.
+    """
+    bus.publish(run_id, RunEvent(type=RunEventType.THINKING, phase=phase, message=message))
 
 
 def _delete_run(conn: sqlite3.Connection, run_id: str) -> None:
@@ -346,6 +390,13 @@ async def execute_run(
                 if not documents:
                     raise ValueError("Run has no resolvable documents to evaluate.")
 
+                total_chars = sum(len(document.text) for document in documents)
+                _think(
+                    run_id,
+                    f"Loaded {len(documents)} document(s) · {total_chars:,} characters. "
+                    "Preparing to generate an exam.",
+                )
+
                 # Name the run from its documents so History shows a recognizable
                 # title (§8). Best-effort: a title failure must never fail the run —
                 # the list endpoint falls back to the document names.
@@ -358,8 +409,36 @@ async def execute_run(
                     logger.warning("title_generation_failed", extra={"run_id": run_id})
 
                 _enter_phase(conn, run_id, RunStatus.GENERATING_EXAM)
+                _think(
+                    run_id,
+                    "Reading the documents and drafting questions across four types — "
+                    "factual, multi-hop, paraphrase, and unanswerable…",
+                    phase=RunStatus.GENERATING_EXAM,
+                )
                 questions = await generate_exam(answerer, run_id, documents, settings.n_questions)
                 insert_questions(conn, questions)
+
+                # Stream each drafted question into the transcript, then a one-line
+                # summary of the exam's shape (its type mix).
+                for idx, question in enumerate(questions, start=1):
+                    bus.publish(
+                        run_id,
+                        RunEvent(
+                            type=RunEventType.QUESTION,
+                            done=idx,
+                            total=len(questions),
+                            question=QuestionPayload(
+                                idx=idx, qtype=question.qtype, text=question.question
+                            ),
+                        ),
+                    )
+                mix = Counter(question.qtype.value for question in questions)
+                shape = " · ".join(f"{count} {qtype}" for qtype, count in sorted(mix.items()))
+                _think(
+                    run_id,
+                    f"Exam ready — {len(questions)} questions: {shape}.",
+                    phase=RunStatus.GENERATING_EXAM,
+                )
 
                 # Resolve the matrix before indexing: the configs decide which
                 # chunk sizes must be built (Sandbox picks arbitrary sizes), and
@@ -369,10 +448,28 @@ async def execute_run(
                 strategies = sorted({config.strategy for config in configs})
 
                 _enter_phase(conn, run_id, RunStatus.INDEXING)
+                sizes = ", ".join(str(size) for size in chunk_sizes)
+                _think(
+                    run_id,
+                    f"Chunking documents at {sizes} tokens, embedding locally, and "
+                    "building the vector and BM25 indexes…",
+                    phase=RunStatus.INDEXING,
+                )
                 for document in documents:
                     await asyncio.to_thread(
                         index_document, conn, document.doc_id, document.text, chunk_sizes, embed
                     )
+                placeholders = ",".join("?" for _ in doc_ids)
+                chunk_count = conn.execute(
+                    f"SELECT COUNT(*) AS c FROM chunks WHERE document_id IN ({placeholders})",
+                    list(doc_ids),
+                ).fetchone()["c"]
+                _think(
+                    run_id,
+                    f"Indexed {chunk_count} chunks across {len(chunk_sizes)} chunk size(s). "
+                    "Vector + BM25 indexes ready.",
+                    phase=RunStatus.INDEXING,
+                )
 
                 _enter_phase(conn, run_id, RunStatus.ANSWERING)
                 insert_configs(conn, configs)
@@ -384,9 +481,35 @@ async def execute_run(
                 total = len(questions)
                 for config in configs:
                     retriever = retrievers[config.strategy]
+                    _think(
+                        run_id,
+                        f"Now evaluating {config.label} — {config.strategy} retrieval, "
+                        f"{config.chunk_size}-token chunks, top-k {config.top_k}.",
+                        phase=RunStatus.ANSWERING,
+                    )
                     for done, question in enumerate(questions, start=1):
                         result = await answer_question(answerer, retriever, question, config)
                         insert_answer(conn, run_id, config.id, question.id, result)
+                        # The content event drives the live chat turn; the progress
+                        # event (kept) drives the per-config bar and question counter.
+                        bus.publish(
+                            run_id,
+                            RunEvent(
+                                type=RunEventType.ANSWER,
+                                config_label=config.label,
+                                done=done,
+                                total=total,
+                                answer=AnswerPayload(
+                                    idx=done,
+                                    qtype=question.qtype,
+                                    question=question.question,
+                                    text=result.answer_text,
+                                    retrieved=len(result.retrieved_chunk_ids),
+                                    latency_ms=result.latency_ms,
+                                    abstained=result.answer_text.strip() == NOT_IN_DOCUMENTS,
+                                ),
+                            ),
+                        )
                         bus.publish(
                             run_id,
                             RunEvent(
@@ -397,15 +520,33 @@ async def execute_run(
                                 total=total,
                             ),
                         )
+                        if done < total:
+                            _think(
+                                run_id,
+                                f"Answer captured. Proceeding with Q{done + 1}…",
+                                phase=RunStatus.ANSWERING,
+                            )
                     bus.publish(
                         run_id,
                         RunEvent(type=RunEventType.CONFIG_DONE, config_label=config.label),
                     )
 
                 _enter_phase(conn, run_id, RunStatus.JUDGING)
+                judge_source = "an independent judge" if judge is not answerer else "the judge"
+                _think(
+                    run_id,
+                    f"Grading every answer with {judge_source} on three metrics — "
+                    "correctness, faithfulness, and retrieval hit…",
+                    phase=RunStatus.JUDGING,
+                )
                 await judge_answers(conn, judge, run_id, questions)
 
                 _enter_phase(conn, run_id, RunStatus.DONE)
+                _think(
+                    run_id,
+                    f"Evaluation complete — {total * len(configs)} answers graded across "
+                    f"{len(configs)} configurations. Opening the report…",
+                )
                 bus.publish(run_id, RunEvent(type=RunEventType.RUN_DONE))
                 logger.info(
                     "run_done",

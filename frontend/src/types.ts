@@ -67,13 +67,51 @@ export interface RunSummary {
   n_configs: number;
 }
 
-/** The kinds of event the run orchestrator publishes over SSE (§6.7). */
+/** The kinds of event the run orchestrator publishes over SSE (§6.7).
+ *
+ * The first five drive the phase timeline and per-config progress bars; the last
+ * four carry real content — narration and the actual questions, answers, and
+ * verdicts — for the live transcript.
+ */
 export type RunEventType =
   | "phase"
   | "progress"
   | "config_done"
   | "run_done"
-  | "error";
+  | "error"
+  | "thinking"
+  | "question"
+  | "answer"
+  | "grade";
+
+/** One exam question as it is drafted (a `question` event's payload). */
+export interface QuestionPayload {
+  idx: number;
+  qtype: QType;
+  text: string;
+}
+
+/** One config's answer to a question (an `answer` event's payload). */
+export interface AnswerPayload {
+  idx: number;
+  qtype: QType;
+  question: string;
+  text: string;
+  retrieved: number;
+  latency_ms: number;
+  abstained: boolean;
+}
+
+/** The judge's verdict for one answer (a `grade` event's payload). */
+export interface GradePayload {
+  idx: number;
+  qtype: QType;
+  correctness: number;
+  faithfulness: number;
+  retrieval_hit: number | null;
+  confidence: JudgeConfidence;
+  rationale: string;
+}
 
 export interface RunEvent {
   type: RunEventType;
@@ -82,6 +120,9 @@ export interface RunEvent {
   done?: number | null;
   total?: number | null;
   message?: string | null;
+  question?: QuestionPayload | null;
+  answer?: AnswerPayload | null;
+  grade?: GradePayload | null;
 }
 
 /** Uniform backend error envelope: `{detail, code}`. */

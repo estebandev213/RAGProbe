@@ -49,17 +49,20 @@ _CONFIDENCE_RANK: dict[JudgeConfidence, int] = {
 }
 
 _CORRECTNESS_SYSTEM = (
-    "You are a strict grader for a question-answering system. Compare a candidate "
-    "answer against the reference answer and decide how correct the candidate is, "
+    "You are a professional RAG evaluation analyst. Compare a candidate answer "
+    "against the reference answer and decide how correct the candidate is, "
     "ignoring wording differences. Score 1 if fully correct, 0.5 if partially "
-    "correct, 0 if wrong or contradictory. Respond with JSON only."
+    "correct, 0 if wrong or contradictory. Write a concise, human rationale in "
+    "a professional tone. Do not use em dashes. Respond with JSON only."
 )
 
 _FAITHFULNESS_SYSTEM = (
-    "You are a strict grader checking whether an answer is grounded in its source "
-    "context. Consider ONLY the provided context — not outside knowledge. Score 1 "
-    "if every claim in the answer is supported by the context, 0.5 if only some "
-    "claims are supported, 0 if it makes unsupported claims. Respond with JSON only."
+    "You are a professional RAG evaluation analyst checking whether an answer is "
+    "grounded in its source context. Consider ONLY the provided context, not "
+    "outside knowledge. Score 1 if every claim in the answer is supported by the "
+    "context, 0.5 if only some claims are supported, 0 if it makes unsupported "
+    "claims. Write a concise, human rationale in a professional tone. Do not use "
+    "em dashes. Respond with JSON only."
 )
 
 
@@ -145,7 +148,8 @@ async def judge_correctness(
         f"Reference answer:\n{question.gold_answer}\n\n"
         f"Candidate answer:\n{answer_text}\n\n"
         "Score the candidate's correctness as 0, 0.5, or 1, with a one-sentence "
-        "rationale and your confidence (low, medium, or high)."
+        "professional RAG analyst rationale and your confidence (low, medium, or "
+        "high). Avoid em dashes."
     )
     return await _judge_one(client, _CORRECTNESS_SYSTEM, prompt, metric="correctness")
 
@@ -161,8 +165,8 @@ async def judge_faithfulness(
         f"Context:\n{build_context(chunks)}\n\n"
         f"Answer:\n{answer_text}\n\n"
         "Score whether every claim in the answer is supported by the context above "
-        "as 0, 0.5, or 1, with a one-sentence rationale and your confidence (low, "
-        "medium, or high)."
+        "as 0, 0.5, or 1, with a one-sentence professional RAG analyst rationale "
+        "and your confidence (low, medium, or high). Avoid em dashes."
     )
     return await _judge_one(client, _FAITHFULNESS_SYSTEM, prompt, metric="faithfulness")
 
@@ -215,7 +219,7 @@ async def grade_answer(
         faithfulness=faithfulness.score,
         retrieval_hit=retrieval_hit,
         judge_rationale=(
-            f"Correctness — {correctness.rationale} Faithfulness — {faithfulness.rationale}"
+            f"Correctness: {correctness.rationale}\nFaithfulness: {faithfulness.rationale}"
         ),
         judge_confidence=_combine_confidence(correctness.confidence, faithfulness.confidence),
         overridden=False,

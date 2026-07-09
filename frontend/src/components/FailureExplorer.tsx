@@ -15,6 +15,16 @@ import type { ConfigScore, FailureRow, QType } from "../types";
 
 const SCORE_OPTIONS = [0, 0.5, 1];
 
+function formatJudgeRationale(rationale: string): string[] {
+  const normalized = rationale
+    .replace(
+      /\s*(Correctness|Faithfulness)\s*(?::|\u2013|\u2014|-)\s*/gi,
+      (_match, label: string) => `\n${label}: `,
+    )
+    .trim();
+  return normalized.split(/\n+/).filter(Boolean);
+}
+
 /** A pass/fail pill for one of the three metrics in the collapsed row. */
 function MetricPill({ label, failed }: { label: string; failed: boolean }) {
   return (
@@ -88,6 +98,7 @@ function FailureCard({
   onOverride: (patch: { correctness?: number; faithfulness?: number }) => void;
 }) {
   const color = configColor(colorIndex);
+  const judgeRationale = formatJudgeRationale(row.judge_rationale);
   return (
     <div className="overflow-hidden rounded-xl border border-slate-200 dark:border-slate-700">
       <button
@@ -193,9 +204,11 @@ function FailureCard({
                 {row.judge_confidence} confidence
               </span>
             </div>
-            <p className="mt-1.5 text-slate-600 dark:text-slate-300">
-              {row.judge_rationale}
-            </p>
+            <div className="mt-2 space-y-1.5 text-slate-600 dark:text-slate-300">
+              {judgeRationale.map((line, index) => (
+                <p key={`${row.grade_id}-rationale-${index}`}>{line}</p>
+              ))}
+            </div>
           </div>
 
           <div className="space-y-2 rounded-lg bg-slate-50 p-3 dark:bg-slate-800/50">

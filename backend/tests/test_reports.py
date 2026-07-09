@@ -157,6 +157,7 @@ def test_recommend_picks_winner_and_phrasing() -> None:
     label, sentence = recommend(build_leaderboard(rows))
     assert label == "800/hybrid"
     assert "800/hybrid" in sentence and "1.4s" in sentence
+    assert "—" not in sentence
 
 
 def test_recommend_empty_leaderboard() -> None:
@@ -175,7 +176,7 @@ def test_recommend_states_sample_size() -> None:
         ),
     ]
     _label, sentence = recommend(build_leaderboard(rows))
-    assert "over 2 answers" in sentence
+    assert "across 2 graded answers" in sentence
 
 
 def test_recommend_flags_near_ties() -> None:
@@ -190,7 +191,7 @@ def test_recommend_flags_near_ties() -> None:
         ),
     ]
     _label, sentence = recommend(build_leaderboard(rows))
-    assert "tied" in sentence
+    assert "practical tie" in sentence
 
 
 # ---------------------------------------------------------------------------

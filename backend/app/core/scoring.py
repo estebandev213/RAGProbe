@@ -228,7 +228,7 @@ def build_breakdown(rows: Sequence[GradedAnswer], order: Sequence[str]) -> list[
 
 
 def recommend(leaderboard: Sequence[ConfigScore]) -> tuple[str | None, str]:
-    """The winning config's label and a one-line recommendation (§8).
+    """The winning config's label and a concise analyst recommendation (§8).
 
     Returns ``(None, "...")`` when there is nothing graded yet. The sentence
     states the sample size, and when the runner-up is within :data:`TIE_MARGIN`
@@ -239,15 +239,16 @@ def recommend(leaderboard: Sequence[ConfigScore]) -> tuple[str | None, str]:
     winner = leaderboard[0]
     latency_s = winner.mean_latency_ms / 1000.0
     sentence = (
-        f"Use {winner.label} — best composite {winner.composite:.2f} "
-        f"over {winner.n_answers} answers, {latency_s:.1f}s avg."
+        f"RAG analyst conclusion: Select {winner.label}. It produced the strongest "
+        f"composite score ({winner.composite:.2f}) across {winner.n_answers} graded "
+        f"answers, with {latency_s:.1f}s average latency."
     )
     if len(leaderboard) > 1:
         runner_up = leaderboard[1]
         margin = winner.composite - runner_up.composite
         if margin < TIE_MARGIN:
             sentence += (
-                f" Margin over {runner_up.label} is only {margin:.2f} — "
-                "treat these as tied at this sample size."
+                f" Caveat: {runner_up.label} is within {margin:.2f}, so treat the "
+                "result as a practical tie until more questions are evaluated."
             )
     return winner.label, sentence

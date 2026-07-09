@@ -1,5 +1,6 @@
 import { ChevronRight, SlidersHorizontal } from "lucide-react";
 import { parseConfigLabel } from "../lib/format";
+import { useI18n } from "../lib/i18n";
 
 export interface ConfigProgress {
   label: string;
@@ -108,6 +109,7 @@ export function ConfigProgressList({
    * time so a fast-moving run never lights up more than a single badge). */
   liveLabel?: string | null;
 }) {
+  const { t } = useI18n();
   return (
     <div className="card flex min-h-0 flex-1 flex-col overflow-hidden">
       <div className="flex shrink-0 items-center gap-3 border-b border-slate-100 px-5 py-4 dark:border-slate-800">
@@ -116,11 +118,11 @@ export function ConfigProgressList({
         </span>
         <div className="min-w-0">
           <h2 className="font-display text-base font-semibold text-slate-800 dark:text-slate-100">
-            Configurations progress
+            {t("progress.title")}
           </h2>
           <p className="mt-0.5 truncate font-mono text-[11px] text-slate-400">
-            {configs.length} configuration{configs.length === 1 ? "" : "s"} in
-            matrix
+            {configs.length} configuration{configs.length === 1 ? "" : "s"} in{" "}
+            {t("progress.matrix")}
           </p>
         </div>
       </div>
@@ -131,7 +133,7 @@ export function ConfigProgressList({
         <div className="fancy-scrollbar min-h-0 flex-1 divide-y divide-slate-100 overflow-y-auto pt-2 dark:divide-slate-800">
           {configs.length === 0 ? (
             <p className="py-6 text-center text-sm text-slate-400">
-              Waiting for the answering phase to begin…
+              {t("progress.waiting")}
             </p>
           ) : (
             configs.map((config, index) => (

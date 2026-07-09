@@ -9,21 +9,79 @@ import {
   MIN_CHUNK_SIZE,
   MIN_TOP_K,
 } from "../lib/configs";
+import { strategyLabel, useI18n } from "../lib/i18n";
 import type { ConfigSpec, Strategy } from "../types";
 
-const STRATEGIES: { value: Strategy; label: string; hint: string }[] = [
-  { value: "vector", label: "Vector", hint: "Dense embedding similarity" },
-  { value: "bm25", label: "BM25", hint: "Sparse keyword matching" },
-  { value: "hybrid", label: "Hybrid", hint: "RRF fusion of both" },
-];
-
+const STRATEGY_VALUES: Strategy[] = ["vector", "bm25", "hybrid"];
 const CHUNK_PRESETS = [256, 400, 512, 800, 1024];
+
+interface NumberFieldProps {
+  id: string;
+  value: number;
+  min: number;
+  max: number;
+  step: number;
+  listId?: string;
+  suffix?: string;
+  onCommit: (value: number) => void;
+}
+
+function NumberField({
+  id,
+  value,
+  min,
+  max,
+  step,
+  listId,
+  suffix,
+  onCommit,
+}: NumberFieldProps) {
+  const [draft, setDraft] = useState<string | null>(null);
+  const displayValue = draft ?? String(value);
+
+  function commit(raw: string) {
+    onCommit(clampConfigValue(Number(raw), min, max));
+    setDraft(null);
+  }
+
+  return (
+    <div className="relative">
+      <input
+        id={id}
+        type="number"
+        inputMode="numeric"
+        list={listId}
+        min={min}
+        max={max}
+        step={step}
+        value={displayValue}
+        onChange={(e) => {
+          const next = e.target.value;
+          setDraft(next);
+          if (next.trim() === "") return;
+
+          const parsed = Number(next);
+          if (Number.isFinite(parsed)) onCommit(Math.round(parsed));
+        }}
+        onBlur={(e) => commit(e.target.value)}
+        className={`w-full rounded-lg border border-slate-300 bg-white px-3 py-2 font-mono text-sm tabular-nums text-slate-800 shadow-sm outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/30 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100 ${
+          suffix ? "pr-14" : ""
+        }`}
+      />
+      {suffix && (
+        <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center font-mono text-[11px] text-slate-400">
+          {suffix}
+        </span>
+      )}
+    </div>
+  );
+}
 
 /** Pick a fresh config that doesn't collide with the existing set, if possible. */
 function nextConfig(configs: ConfigSpec[]): ConfigSpec {
   const taken = new Set(configs.map(keyOf));
   for (const chunk_size of [400, 800, 512, 256, 1024]) {
-    for (const { value: strategy } of STRATEGIES) {
+    for (const strategy of STRATEGY_VALUES) {
       const candidate: ConfigSpec = { chunk_size, strategy, top_k: 5 };
       if (!taken.has(keyOf(candidate))) return candidate;
     }
@@ -44,7 +102,8 @@ export function ConfigEditor({
   maxConfigs,
   demoMode,
 }: ConfigEditorProps) {
-  const [open, setOpen] = useState(false);
+  const { language, t } = useI18n();
+  const [open, setOpen] = useState(true);
   const presetsId = useId();
   const dupes = duplicateIndices(configs);
   const atCap = configs.length >= maxConfigs;
@@ -80,11 +139,10 @@ export function ConfigEditor({
         </span>
         <span className="flex-1">
           <span className="block font-display font-semibold text-slate-800 dark:text-slate-100">
-            Configuration
+            {t("config.title")}
           </span>
           <span className="mt-0.5 block text-sm text-slate-500 dark:text-slate-400">
-            Tune the RAG configurations to evaluate: chunk size, strategy,
-            depth.
+            {t("config.subtitle")}
           </span>
         </span>
         <span className="hidden items-center gap-2 font-mono text-xs text-slate-400 sm:flex">
@@ -103,9 +161,7 @@ export function ConfigEditor({
         <div className="border-t border-slate-200/70 px-5 pb-5 pt-4 dark:border-slate-700/60">
           <div className="mb-4 flex items-center justify-between gap-3">
             <p className="text-xs text-slate-500 dark:text-slate-400">
-              {demoMode
-                ? "Demo mode allows up to 2 configurations."
-                : "Full mode allows up to 4 configurations."}
+              {demoMode ? t("config.demoCap") : t("config.fullCap")}
             </p>
             <button
               type="button"
@@ -113,7 +169,7 @@ export function ConfigEditor({
               disabled={atCap}
               className="inline-flex items-center gap-1.5 rounded-lg border border-accent/30 bg-accent-soft px-3 py-1.5 text-sm font-medium text-accent transition hover:bg-accent/10 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-accent/10"
             >
-              <Plus size={15} /> Add configuration
+              <Plus size={15} /> {t("config.add")}
             </button>
           </div>
 
@@ -123,7 +179,7 @@ export function ConfigEditor({
             ))}
           </datalist>
 
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-4">
             {configs.map((config, index) => {
               const isDupe = dupes.has(index);
               return (
@@ -137,42 +193,39 @@ export function ConfigEditor({
                 >
                   <div className="mb-3 flex items-center justify-between">
                     <span className="font-mono text-[11px] font-semibold uppercase tracking-wider text-accent">
-                      Config {index + 1}
+                      {t("config.item")} {index + 1}
                     </span>
                     <button
                       type="button"
                       onClick={() => remove(index)}
                       disabled={configs.length <= 1}
-                      aria-label={`Remove configuration ${index + 1}`}
+                      aria-label={`${t("config.remove")} ${index + 1}`}
                       className="text-slate-400 transition hover:text-red-500 disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:text-slate-400"
                     >
                       <X size={16} />
                     </button>
                   </div>
 
-                  {/* Strategy — segmented control, reads like an instrument selector. */}
                   <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wide text-slate-400">
-                    Strategy
+                    {t("config.strategy")}
                   </label>
                   <div className="mb-4 grid grid-cols-3 gap-1 rounded-lg bg-slate-100 p-1 dark:bg-slate-800">
-                    {STRATEGIES.map((strategy) => {
-                      const active = config.strategy === strategy.value;
+                    {STRATEGY_VALUES.map((strategy) => {
+                      const active = config.strategy === strategy;
                       return (
                         <button
-                          key={strategy.value}
+                          key={strategy}
                           type="button"
-                          title={strategy.hint}
+                          title={t(`strategy.${strategy}.hint`)}
                           aria-pressed={active}
-                          onClick={() =>
-                            patch(index, { strategy: strategy.value })
-                          }
+                          onClick={() => patch(index, { strategy })}
                           className={`rounded-md px-2 py-1.5 text-xs font-medium transition ${
                             active
                               ? "bg-white text-accent shadow-sm dark:bg-slate-900 dark:text-accent"
                               : "text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200"
                           }`}
                         >
-                          {strategy.label}
+                          {strategyLabel(language, strategy)}
                         </button>
                       );
                     })}
@@ -184,35 +237,21 @@ export function ConfigEditor({
                         htmlFor={`chunk-${index}`}
                         className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wide text-slate-400"
                       >
-                        Chunk size
+                        {t("config.chunk")}
                       </label>
                       <div className="relative">
-                        <input
+                        <NumberField
                           id={`chunk-${index}`}
-                          type="number"
-                          inputMode="numeric"
-                          list={presetsId}
+                          listId={presetsId}
                           min={MIN_CHUNK_SIZE}
                           max={MAX_CHUNK_SIZE}
                           step={16}
                           value={config.chunk_size}
-                          onChange={(e) =>
-                            patch(index, { chunk_size: e.target.valueAsNumber })
+                          suffix="tok"
+                          onCommit={(chunk_size) =>
+                            patch(index, { chunk_size })
                           }
-                          onBlur={(e) =>
-                            patch(index, {
-                              chunk_size: clampConfigValue(
-                                e.target.valueAsNumber,
-                                MIN_CHUNK_SIZE,
-                                MAX_CHUNK_SIZE,
-                              ),
-                            })
-                          }
-                          className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 pr-14 font-mono text-sm tabular-nums text-slate-800 shadow-sm outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/30 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
                         />
-                        <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center font-mono text-[11px] text-slate-400">
-                          tok
-                        </span>
                       </div>
                     </div>
 
@@ -223,34 +262,20 @@ export function ConfigEditor({
                       >
                         Top-K
                       </label>
-                      <input
+                      <NumberField
                         id={`topk-${index}`}
-                        type="number"
-                        inputMode="numeric"
                         min={MIN_TOP_K}
                         max={MAX_TOP_K}
                         step={1}
                         value={config.top_k}
-                        onChange={(e) =>
-                          patch(index, { top_k: e.target.valueAsNumber })
-                        }
-                        onBlur={(e) =>
-                          patch(index, {
-                            top_k: clampConfigValue(
-                              e.target.valueAsNumber,
-                              MIN_TOP_K,
-                              MAX_TOP_K,
-                            ),
-                          })
-                        }
-                        className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 font-mono text-sm tabular-nums text-slate-800 shadow-sm outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/30 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
+                        onCommit={(top_k) => patch(index, { top_k })}
                       />
                     </div>
                   </div>
 
                   {isDupe && (
                     <p className="mt-3 text-xs font-medium text-red-500">
-                      Duplicate configuration — make it unique.
+                      {t("config.duplicate")}
                     </p>
                   )}
                 </div>

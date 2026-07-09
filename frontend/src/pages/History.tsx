@@ -20,6 +20,7 @@ import {
 import { Link } from "react-router-dom";
 import { ApiRequestError, deleteRun, listRuns, renameRun } from "../api/client";
 import { formatAge, formatDateTime } from "../lib/format";
+import { useI18n } from "../lib/i18n";
 import type { RunSummary } from "../types";
 
 const MENU_WIDTH = 168;
@@ -32,6 +33,7 @@ function plural(n: number, word: string): string {
 
 /** Page heading with a subtitle and a shortcut back to a fresh evaluation. */
 function Header({ subtitle }: { subtitle: string }) {
+  const { t } = useI18n();
   return (
     <div className="flex flex-wrap items-center justify-between gap-4">
       <div className="group flex items-center gap-5">
@@ -41,7 +43,7 @@ function Header({ subtitle }: { subtitle: string }) {
         />
         <div>
           <h1 className="font-display text-4xl font-bold tracking-tight text-slate-900 dark:text-white">
-            History
+            {t("history.title")}
           </h1>
           <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
             {subtitle}
@@ -56,7 +58,7 @@ function Header({ subtitle }: { subtitle: string }) {
           size={16}
           className="transition-transform duration-200 group-hover:rotate-90"
         />
-        New evaluation
+        {t("history.new")}
       </Link>
     </div>
   );
@@ -110,6 +112,7 @@ function ContextMenu({
   onDelete: () => void;
   onClose: () => void;
 }) {
+  const { t } = useI18n();
   useEffect(() => {
     const handlePointer = () => onClose();
     const handleKey = (event: globalThis.KeyboardEvent) => {
@@ -136,7 +139,7 @@ function ContextMenu({
         onClick={onRename}
         className="flex w-full items-center gap-2 px-3 py-2 text-left text-slate-600 transition hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700/60"
       >
-        <Pencil size={14} /> Rename
+        <Pencil size={14} /> {t("history.rename")}
       </button>
       <button
         type="button"
@@ -144,7 +147,7 @@ function ContextMenu({
         onClick={onDelete}
         className="flex w-full items-center gap-2 px-3 py-2 text-left text-rose-600 transition hover:bg-rose-50 dark:text-rose-400 dark:hover:bg-rose-500/10"
       >
-        <Trash2 size={14} /> Delete
+        <Trash2 size={14} /> {t("history.delete")}
       </button>
     </div>
   );
@@ -292,27 +295,27 @@ function RunRow({
 
 /** Empty state: no runs recorded yet. */
 function EmptyState() {
+  const { t } = useI18n();
   return (
     <div className="animate-fade-in">
       <h1 className="font-display text-4xl font-bold tracking-tight text-slate-900 dark:text-white">
-        History
+        {t("history.title")}
       </h1>
       <div className="card mt-8 flex flex-col items-center gap-3 p-12 text-center">
         <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-accent-soft text-accent">
           <FileText size={26} />
         </div>
         <p className="font-display text-lg font-semibold text-slate-800 dark:text-slate-100">
-          No runs yet
+          {t("history.noRuns")}
         </p>
         <p className="max-w-md text-sm text-slate-500 dark:text-slate-400">
-          Every evaluation you run shows up here. Start one from the upload
-          screen and it will be one click away afterwards.
+          {t("history.noRunsBody")}
         </p>
         <Link
           to="/"
           className="mt-2 rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white transition hover:bg-accent-fg"
         >
-          New evaluation
+          {t("history.new")}
         </Link>
       </div>
     </div>
@@ -321,6 +324,7 @@ function EmptyState() {
 
 /** History screen: a run log linking each evaluation to its report (§8). */
 export function HistoryPage() {
+  const { language, t } = useI18n();
   const [runs, setRuns] = useState<RunSummary[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -403,7 +407,7 @@ export function HistoryPage() {
   if (loading) {
     return (
       <div className="animate-fade-in">
-        <Header subtitle="Past evaluations, newest first." />
+        <Header subtitle={t("history.subtitle")} />
         <div className="card mt-8 flex items-center justify-center p-16 text-sm text-slate-400">
           Loading run history…
         </div>
@@ -414,13 +418,13 @@ export function HistoryPage() {
   if (error || !runs) {
     return (
       <div className="animate-fade-in">
-        <Header subtitle="Past evaluations, newest first." />
+        <Header subtitle={t("history.subtitle")} />
         <div className="card mt-8 flex flex-col items-center gap-2 p-12 text-center">
           <p className="font-display text-lg font-semibold text-slate-800 dark:text-slate-100">
-            Couldn't load run history
+            {t("history.loadError")}
           </p>
           <p className="max-w-md text-sm text-slate-500 dark:text-slate-400">
-            {error ?? "The run history is not available right now."}
+            {error ?? t("history.notAvailable")}
           </p>
         </div>
       </div>
@@ -431,7 +435,14 @@ export function HistoryPage() {
     return <EmptyState />;
   }
 
-  const noun = runs.length === 1 ? "evaluation" : "evaluations";
+  const noun =
+    language === "es"
+      ? runs.length === 1
+        ? "evaluacion"
+        : "evaluaciones"
+      : runs.length === 1
+        ? "evaluation"
+        : "evaluations";
 
   return (
     <div className="animate-fade-in">

@@ -9,6 +9,7 @@ import {
 import { useMemo, useState } from "react";
 import { configColor } from "../lib/configColors";
 import { formatLatency, formatScore, strategyDetail } from "../lib/format";
+import { useI18n } from "../lib/i18n";
 import type { ConfigScore } from "../types";
 
 type SortKey =
@@ -150,6 +151,7 @@ function SortHeaderCell({
  * relative to the slowest config so the fastest reads shortest.
  */
 export function Leaderboard({ rows }: { rows: ConfigScore[] }) {
+  const { t } = useI18n();
   const [sortKey, setSortKey] = useState<SortKey>("composite");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
 
@@ -183,7 +185,7 @@ export function Leaderboard({ rows }: { rows: ConfigScore[] }) {
   return (
     <div className="card p-5">
       <h2 className="flex items-center gap-1.5 font-display text-base font-semibold text-slate-800 dark:text-slate-100">
-        Leaderboard
+        {t("leaderboard.title")}
         <Info size={14} className="text-slate-300" />
       </h2>
 
@@ -192,46 +194,46 @@ export function Leaderboard({ rows }: { rows: ConfigScore[] }) {
           <thead>
             <tr className="border-b border-slate-200 text-xs dark:border-slate-700">
               <th className="px-3 pb-2 text-left font-medium text-slate-400">
-                Rank
+                {t("leaderboard.rank")}
               </th>
               <th className="px-3 pb-2 text-left font-medium text-slate-400">
-                Configuration
+                {t("leaderboard.config")}
               </th>
               <SortHeaderCell
-                label="Composite"
-                hint="higher is better"
+                label={t("leaderboard.composite")}
+                hint={t("leaderboard.higher")}
                 sortKey="composite"
                 active={sortKey === "composite"}
                 dir={sortDir}
                 onSort={handleSort}
               />
               <SortHeaderCell
-                label="Correctness"
-                hint="higher is better"
+                label={t("leaderboard.correctness")}
+                hint={t("leaderboard.higher")}
                 sortKey="correctness"
                 active={sortKey === "correctness"}
                 dir={sortDir}
                 onSort={handleSort}
               />
               <SortHeaderCell
-                label="Faithfulness"
-                hint="higher is better"
+                label={t("leaderboard.faithfulness")}
+                hint={t("leaderboard.higher")}
                 sortKey="faithfulness"
                 active={sortKey === "faithfulness"}
                 dir={sortDir}
                 onSort={handleSort}
               />
               <SortHeaderCell
-                label="Retrieval"
-                hint="higher is better"
+                label={t("leaderboard.retrieval")}
+                hint={t("leaderboard.higher")}
                 sortKey="retrieval_hit"
                 active={sortKey === "retrieval_hit"}
                 dir={sortDir}
                 onSort={handleSort}
               />
               <SortHeaderCell
-                label="Avg Latency"
-                hint="lower is better"
+                label={t("leaderboard.avgLatency")}
+                hint={t("leaderboard.lower")}
                 sortKey="mean_latency_ms"
                 active={sortKey === "mean_latency_ms"}
                 dir={sortDir}

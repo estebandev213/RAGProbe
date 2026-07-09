@@ -22,6 +22,7 @@ import {
   formatRelative,
   formatScore,
 } from "../lib/format";
+import { useI18n } from "../lib/i18n";
 import { bestByMetric } from "../lib/leaderboard";
 import type { ConfigScore, ReportResponse } from "../types";
 
@@ -77,6 +78,7 @@ function configById(
 }
 
 export function ReportPage() {
+  const { t } = useI18n();
   const { runId = "" } = useParams();
   // A run that failed navigates here with its message in state; the run itself
   // has been deleted, so this page is rendered purely as an error page.
@@ -134,7 +136,7 @@ export function ReportPage() {
       to="/"
       className="inline-flex items-center gap-1.5 text-sm font-medium text-accent hover:underline"
     >
-      <ArrowLeft size={16} /> New evaluation
+      <ArrowLeft size={16} /> {t("report.new")}
     </Link>
   );
 
@@ -149,7 +151,7 @@ export function ReportPage() {
             <AlertTriangle size={26} />
           </div>
           <p className="font-display text-lg font-semibold text-slate-800 dark:text-slate-100">
-            Run failed
+            {t("run.failed")}
           </p>
           <p className="max-w-md text-sm text-slate-500 dark:text-slate-400">
             {failureMessage}
@@ -159,13 +161,13 @@ export function ReportPage() {
               to="/"
               className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white transition hover:bg-accent-fg"
             >
-              Start a new evaluation
+              {t("report.failed.start")}
             </Link>
             <Link
               to="/history"
               className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-4 py-2 text-sm font-medium text-slate-600 transition hover:bg-slate-100/70 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800/60"
             >
-              View history
+              {t("report.failed.history")}
             </Link>
           </div>
         </div>
@@ -190,10 +192,10 @@ export function ReportPage() {
         {backLink}
         <div className="card mt-6 flex flex-col items-center gap-2 p-12 text-center">
           <p className="font-display text-lg font-semibold text-slate-800 dark:text-slate-100">
-            Couldn't load this report
+            {t("report.loadError")}
           </p>
           <p className="max-w-md text-sm text-slate-500 dark:text-slate-400">
-            {error ?? "The report is not available yet."}
+            {error ?? t("report.notAvailable")}
           </p>
         </div>
       </div>
@@ -209,11 +211,10 @@ export function ReportPage() {
         {backLink}
         <div className="card mt-6 flex flex-col items-center gap-2 p-12 text-center">
           <p className="font-display text-lg font-semibold text-slate-800 dark:text-slate-100">
-            No graded answers yet
+            {t("report.noGrades")}
           </p>
           <p className="max-w-md text-sm text-slate-500 dark:text-slate-400">
-            This run produced no grades, so there's nothing to rank. Start a new
-            evaluation from the upload screen.
+            {t("report.noGradesBody")}
           </p>
         </div>
       </div>
@@ -239,7 +240,7 @@ export function ReportPage() {
               className="shrink-0 text-accent dark:text-white"
             />
             <h1 className="font-display text-4xl font-bold tracking-tight text-slate-900 dark:text-white">
-              Evaluation report
+              {t("report.title")}
             </h1>
           </div>
           {runTitle && (
@@ -261,14 +262,14 @@ export function ReportPage() {
 
         <div className="card flex items-start gap-8 px-5 py-3">
           <div>
-            <p className="text-xs text-slate-400">Run ID</p>
+            <p className="text-xs text-slate-400">{t("report.runId")}</p>
             <div className="flex items-center gap-1.5">
               <span className="font-mono text-sm text-slate-700 dark:text-slate-200">
                 {runId}
               </span>
               <button
                 type="button"
-                aria-label="Copy run id"
+                aria-label={t("run.copy")}
                 onClick={() => navigator.clipboard?.writeText(runId)}
                 className="text-slate-400 transition hover:text-slate-700 dark:hover:text-slate-200"
               >
@@ -278,7 +279,7 @@ export function ReportPage() {
           </div>
           {created && (
             <div>
-              <p className="text-xs text-slate-400">Date</p>
+              <p className="text-xs text-slate-400">{t("report.date")}</p>
               <p className="font-mono text-sm text-slate-700 dark:text-slate-200">
                 {formatDateTime(created)}
               </p>
@@ -304,7 +305,7 @@ export function ReportPage() {
             }
             glow="bg-emerald-400/30"
             edge="from-emerald-400/70"
-            label="Highest correctness"
+            label={t("report.highestCorrectness")}
             value={formatScore(bestCorrectness?.correctness ?? null)}
             caption={bestCorrectness?.label ?? "—"}
           />
@@ -318,7 +319,7 @@ export function ReportPage() {
             }
             glow="bg-sky-400/30"
             edge="from-sky-400/70"
-            label="Best retrieval"
+            label={t("report.bestRetrieval")}
             value={formatScore(bestRetrieval?.retrieval_hit ?? null)}
             caption={bestRetrieval?.label ?? "—"}
           />
@@ -332,7 +333,7 @@ export function ReportPage() {
             }
             glow="bg-amber-400/30"
             edge="from-amber-400/70"
-            label="Lowest latency"
+            label={t("report.lowestLatency")}
             value={fastest ? formatLatency(fastest.mean_latency_ms) : "—"}
             caption={fastest?.label ?? "—"}
           />
@@ -346,10 +347,10 @@ export function ReportPage() {
             />
             <div className="min-w-0">
               <p className="font-display text-lg font-semibold text-slate-800 dark:text-slate-100">
-                Inspect failures
+                {t("report.inspectFailures")}
               </p>
               <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
-                Explore where each configuration succeeded and failed.
+                {t("report.inspectBody")}
               </p>
             </div>
             <div className="relative flex h-16 w-16 shrink-0 items-center justify-center text-accent">
@@ -381,7 +382,7 @@ export function ReportPage() {
       />
 
       <p className="mt-6 text-center text-xs text-slate-400">
-        Scores are LLM-judged and may vary. Review failures for details.
+        {t("report.footer")}
       </p>
     </div>
   );

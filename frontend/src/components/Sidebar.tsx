@@ -8,7 +8,9 @@ import {
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
+import { useI18n } from "../lib/i18n";
 import { getActiveRunId } from "../lib/session";
+import { LanguageToggle } from "./LanguageToggle";
 import { ThemeToggle } from "./ThemeToggle";
 
 const STORAGE_KEY = "ragprobe:sidebar-open";
@@ -34,6 +36,7 @@ interface NavEntry {
 /** Persistent left rail: brand, navigation, live-status, and the theme toggle. */
 export function Sidebar() {
   const navigate = useNavigate();
+  const { t } = useI18n();
   const { pathname } = useLocation();
   // Re-read on every navigation (pathname change re-renders this rail); each
   // session write in the app is paired with a navigation, so the links stay fresh.
@@ -52,10 +55,15 @@ export function Sidebar() {
   const onReport = pathname.endsWith("/report");
 
   const entries: NavEntry[] = [
-    { label: "Upload", icon: UploadIcon, to: "/", active: pathname === "/" },
+    {
+      label: t("nav.upload"),
+      icon: UploadIcon,
+      to: "/",
+      active: pathname === "/",
+    },
     {
       // Progress is a destination only while a run is actively processing.
-      label: "Progress",
+      label: t("nav.progress"),
       icon: Clock,
       to: activeRunId ? `/runs/${activeRunId}` : null,
       active: onRun && !onReport,
@@ -63,13 +71,13 @@ export function Sidebar() {
     {
       // Report is reachable only via a progress-completion or history redirect;
       // the rail merely indicates when one is open, never offers a shortcut.
-      label: "Report",
+      label: t("nav.report"),
       icon: BarChart3,
       to: null,
       active: onReport,
     },
     {
-      label: "History",
+      label: t("nav.history"),
       icon: FileText,
       to: "/history",
       active: pathname === "/history",
@@ -82,7 +90,7 @@ export function Sidebar() {
         <button
           type="button"
           onClick={() => setOpen(true)}
-          aria-label="Show sidebar"
+          aria-label={t("sidebar.show")}
           className="flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 shadow-sm transition hover:bg-slate-100 hover:text-slate-800 dark:border-slate-700/50 dark:bg-slate-950 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-200"
         >
           <PanelLeftOpen size={18} />
@@ -103,7 +111,7 @@ export function Sidebar() {
         <button
           type="button"
           onClick={() => setOpen(false)}
-          aria-label="Hide sidebar"
+          aria-label={t("sidebar.hide")}
           className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-800 dark:hover:bg-slate-800 dark:hover:text-slate-200"
         >
           <PanelLeftClose size={16} />
@@ -135,7 +143,10 @@ export function Sidebar() {
       </nav>
 
       <div className="mt-auto flex items-center justify-between px-1">
-        <ThemeToggle />
+        <div className="flex items-center gap-1">
+          <LanguageToggle />
+          <ThemeToggle />
+        </div>
         <span className="font-mono text-xs text-slate-400">
           v{__APP_VERSION__}
         </span>

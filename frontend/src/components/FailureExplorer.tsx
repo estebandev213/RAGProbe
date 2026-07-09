@@ -10,6 +10,7 @@ import { ApiRequestError, getFailures, overrideGrade } from "../api/client";
 import { CONFIDENCE_STYLE } from "../lib/confidence";
 import { configColor } from "../lib/configColors";
 import { formatScore } from "../lib/format";
+import { qtypeLabel, useI18n } from "../lib/i18n";
 import { QTYPE_LABEL, QTYPE_ORDER } from "../lib/qtype";
 import type { ConfigScore, FailureRow, QType } from "../types";
 
@@ -298,6 +299,7 @@ export function FailureExplorer({
   leaderboard: ConfigScore[];
   onGradeChanged: () => void;
 }) {
+  const { language, t } = useI18n();
   const [rows, setRows] = useState<FailureRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -389,11 +391,11 @@ export function FailureExplorer({
     <section id="failures" className="card mt-6 scroll-mt-6 p-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h2 className="font-display text-base font-semibold text-slate-800 dark:text-slate-100">
-          Failure explorer
+          {t("failure.title")}
         </h2>
         <div className="flex flex-wrap items-center gap-3 text-sm">
           <FilterSelect value={configId} onChange={setConfigId}>
-            <option value="all">All configurations</option>
+            <option value="all">{t("failure.allConfigs")}</option>
             {leaderboard.map((config) => (
               <option key={config.config_id} value={config.config_id}>
                 {config.label}
@@ -404,10 +406,10 @@ export function FailureExplorer({
             value={qtype}
             onChange={(value) => setQtype(value as QType | "all")}
           >
-            <option value="all">All question types</option>
+            <option value="all">{t("failure.allTypes")}</option>
             {QTYPE_ORDER.map((type) => (
               <option key={type} value={type}>
-                {QTYPE_LABEL[type]}
+                {qtypeLabel(language, type)}
               </option>
             ))}
           </FilterSelect>
@@ -418,7 +420,7 @@ export function FailureExplorer({
               onChange={(event) => setOnlyFailures(event.target.checked)}
               className="h-4 w-4 rounded border-slate-300 text-accent focus:ring-accent focus:ring-offset-0"
             />
-            Only failures
+            {t("failure.only")}
           </label>
         </div>
       </div>
@@ -426,7 +428,7 @@ export function FailureExplorer({
       <div className="mt-4 space-y-2">
         {loading ? (
           <p className="py-8 text-center text-sm text-slate-400">
-            Loading graded answers…
+            {t("failure.loading")}
           </p>
         ) : error ? (
           <div className="flex items-center justify-center gap-2 py-8 text-sm text-rose-600">
@@ -435,8 +437,8 @@ export function FailureExplorer({
         ) : visible.length === 0 ? (
           <p className="py-8 text-center text-sm text-slate-400">
             {onlyFailures
-              ? "No failures match these filters — every answer scored a perfect composite."
-              : "No graded answers match these filters."}
+              ? t("failure.noneFailures")
+              : t("failure.noneAnswers")}
           </p>
         ) : (
           groups.map((group) => (

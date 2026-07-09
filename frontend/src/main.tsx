@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
 import "./index.css";
 import App from "./App.tsx";
+import { I18nProvider } from "./lib/i18n";
 
 // Apply the saved theme before first paint to avoid a flash of the wrong mode.
 try {
@@ -15,8 +16,10 @@ try {
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <BrowserRouter>
-      <App />
-    </BrowserRouter>
+    <I18nProvider>
+      <BrowserRouter>
+        <App />
+      </BrowserRouter>
+    </I18nProvider>
   </StrictMode>,
 );

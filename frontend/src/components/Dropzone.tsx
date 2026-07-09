@@ -1,5 +1,6 @@
 import { FilePlus2, FolderOpen, Plus, Sparkles } from "lucide-react";
 import { useRef, useState } from "react";
+import { useI18n } from "../lib/i18n";
 
 interface DropzoneProps {
   onFiles: (files: File[]) => void;
@@ -17,6 +18,7 @@ export function Dropzone({
   compact = false,
   onUseSamples,
 }: DropzoneProps) {
+  const { t } = useI18n();
   const inputRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
 
@@ -68,7 +70,7 @@ export function Dropzone({
           size={16}
           className="text-accent transition group-hover:rotate-90"
         />
-        Add more files
+        {t("dropzone.addMore")}
         <span className="text-xs font-normal text-slate-400">
           PDF · MD · TXT
         </span>
@@ -88,11 +90,9 @@ export function Dropzone({
     >
       <FilePlus2 className="text-accent" size={34} strokeWidth={1.6} />
       <p className="mt-4 font-display text-lg font-semibold text-slate-800 dark:text-slate-100">
-        Drag &amp; drop files here
+        {t("dropzone.drag")}
       </p>
-      <p className="mt-1 text-sm text-slate-400">
-        PDF, Markdown (.md) or Text (.txt)
-      </p>
+      <p className="mt-1 text-sm text-slate-400">{t("dropzone.types")}</p>
 
       <div className="mt-5 flex flex-wrap items-center justify-center gap-3">
         <button
@@ -105,7 +105,7 @@ export function Dropzone({
             size={16}
             className="transition duration-300 group-hover:-translate-y-0.5 group-hover:text-accent motion-reduce:transform-none"
           />
-          Browse files
+          {t("dropzone.browse")}
         </button>
 
         {onUseSamples && (
@@ -119,7 +119,7 @@ export function Dropzone({
               size={16}
               className="transition duration-300 group-hover:rotate-12 group-hover:scale-110 motion-reduce:transform-none"
             />
-            Use sample documents
+            {t("dropzone.samples")}
           </button>
         )}
       </div>

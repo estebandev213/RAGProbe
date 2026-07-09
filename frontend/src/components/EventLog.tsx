@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { ScrollText } from "lucide-react";
+import { useI18n } from "../lib/i18n";
 import { Switch } from "./Switch";
 
 export type LogKind = "info" | "phase" | "progress" | "success" | "error";
@@ -27,6 +28,7 @@ export function EventLog({
   entries: LogEntry[];
   onClear: () => void;
 }) {
+  const { t } = useI18n();
   const [autoScroll, setAutoScroll] = useState(true);
   // Scrolled directly on this element (never scrollIntoView): that call can
   // bubble to the page's own scroll container and drag the whole viewport
@@ -54,20 +56,21 @@ export function EventLog({
           </span>
           <div className="min-w-0">
             <h2 className="font-display text-base font-semibold text-slate-800 dark:text-slate-100">
-              Live event log
+              {t("event.title")}
             </h2>
             <p className="mt-0.5 truncate font-mono text-[11px] text-slate-400">
-              {entries.length} event{entries.length === 1 ? "" : "s"} received
+              {entries.length} event{entries.length === 1 ? "" : "s"}{" "}
+              {t("event.received")}
             </p>
           </div>
         </div>
         <div className="flex items-center gap-3">
           <label className="flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400">
-            Auto-scroll
+            {t("event.auto")}
             <Switch
               checked={autoScroll}
               onChange={setAutoScroll}
-              label="Toggle auto-scroll"
+              label={t("event.toggle")}
               size="sm"
             />
           </label>
@@ -76,7 +79,7 @@ export function EventLog({
             onClick={onClear}
             className="rounded-md border border-slate-200 px-2.5 py-1 text-xs font-medium text-slate-500 transition hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800"
           >
-            Clear
+            {t("event.clear")}
           </button>
         </div>
       </div>
@@ -86,7 +89,7 @@ export function EventLog({
         className="fancy-scrollbar min-h-0 flex-1 overflow-y-auto px-5 py-4 pr-4"
       >
         {entries.length === 0 ? (
-          <p className="py-6 text-sm text-slate-400">No events yet.</p>
+          <p className="py-6 text-sm text-slate-400">{t("event.empty")}</p>
         ) : (
           <ul className="space-y-1.5">
             {entries.map((entry, index) => {

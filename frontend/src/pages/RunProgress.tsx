@@ -25,6 +25,7 @@ import {
 } from "../components/PhaseTimeline";
 import { StatCard } from "../components/StatCard";
 import { formatClock, formatElapsed, formatNumber } from "../lib/format";
+import { useI18n } from "../lib/i18n";
 import {
   MOCK_RUN_ID,
   mockConfigs,
@@ -140,6 +141,7 @@ function transcriptItem(event: RunEvent, id: number): TranscriptItem | null {
 }
 
 export function RunProgressPage() {
+  const { t } = useI18n();
   const { runId = "" } = useParams();
   const navigate = useNavigate();
   const navState = (useLocation().state as RunNavState | null) ?? {};
@@ -487,18 +489,18 @@ export function RunProgressPage() {
           />
           <div>
             <h1 className="font-display text-4xl font-bold tracking-tight text-slate-900 dark:text-white">
-              Run progress
+              {t("run.title")}
             </h1>
             <div className="mt-3 flex flex-wrap items-center gap-3 text-sm text-slate-500 dark:text-slate-400">
               <span>
-                Run ID:{" "}
+                {t("run.id")}{" "}
                 <span className="font-mono text-slate-700 dark:text-slate-200">
                   {runId}
                 </span>
               </span>
               <button
                 type="button"
-                aria-label="Copy run id"
+                aria-label={t("run.copy")}
                 onClick={() => navigator.clipboard?.writeText(runId)}
                 className="text-slate-400 transition hover:text-slate-700 dark:hover:text-slate-200"
               >
@@ -506,7 +508,7 @@ export function RunProgressPage() {
               </button>
               {navState.demoMode && (
                 <span className="rounded-full bg-accent-soft px-2.5 py-0.5 text-xs font-medium text-accent">
-                  Demo mode
+                  {t("run.demoMode")}
                 </span>
               )}
               {!terminal && !confirmingCancel && (
@@ -515,7 +517,7 @@ export function RunProgressPage() {
                   onClick={() => setConfirmingCancel(true)}
                   className="inline-flex items-center gap-1.5 rounded-lg border border-red-300 bg-white px-2.5 py-1 text-xs font-medium text-red-600 shadow-sm transition hover:bg-red-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:border-red-500/40 dark:bg-slate-800 dark:text-red-400 dark:hover:bg-red-500/10 dark:focus-visible:ring-offset-slate-900"
                 >
-                  <Ban size={13} /> Cancel run
+                  <Ban size={13} /> {t("run.cancel")}
                 </button>
               )}
             </div>
@@ -523,7 +525,7 @@ export function RunProgressPage() {
             {!terminal && confirmingCancel && (
               <div className="mt-3 flex flex-col items-start gap-2">
                 <span className="text-sm text-slate-500 dark:text-slate-400">
-                  Discard this run?
+                  {t("run.discard")}
                 </span>
                 <div className="flex flex-wrap items-center gap-2">
                   <button
@@ -532,7 +534,7 @@ export function RunProgressPage() {
                     disabled={cancelling}
                     className="inline-flex items-center gap-1.5 rounded-lg bg-red-500 px-2.5 py-1 text-xs font-semibold text-white shadow-sm transition hover:bg-red-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500 focus-visible:ring-offset-2 focus-visible:ring-offset-white disabled:opacity-60 dark:focus-visible:ring-offset-slate-900"
                   >
-                    <Ban size={13} /> Confirm
+                    <Ban size={13} /> {t("run.confirm")}
                   </button>
                   <button
                     type="button"
@@ -540,7 +542,7 @@ export function RunProgressPage() {
                     disabled={cancelling}
                     className="rounded-lg px-2 py-1 text-xs font-medium text-slate-500 transition hover:text-slate-700 disabled:opacity-60 dark:text-slate-400 dark:hover:text-slate-200"
                   >
-                    Keep running
+                    {t("run.keep")}
                   </button>
                 </div>
               </div>
@@ -555,12 +557,14 @@ export function RunProgressPage() {
             </div>
             <div>
               <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
-                Elapsed time
+                {t("run.elapsed")}
               </p>
               <p className="font-mono text-xl font-semibold leading-tight tabular-nums text-slate-800 dark:text-slate-100">
                 {formatElapsed(elapsed)}
               </p>
-              <p className="text-xs text-slate-400">Started {startedLabel}</p>
+              <p className="text-xs text-slate-400">
+                {t("run.started")} {startedLabel}
+              </p>
             </div>
           </div>
           <div className="card flex min-w-[190px] items-center gap-3.5 px-4 py-3">
@@ -599,11 +603,9 @@ export function RunProgressPage() {
             className="mt-0.5 shrink-0 text-amber-600 dark:text-amber-400"
           />
           <div className="text-amber-800 dark:text-amber-300">
-            <p className="font-semibold">This run appears stalled.</p>
+            <p className="font-semibold">{t("run.stalledTitle")}</p>
             <p className="text-amber-700/90 dark:text-amber-300/80">
-              No progress has arrived in a while, it may be throttled by the
-              free tier, or the worker may have stopped. It will auto-cancel if
-              this continues, or you can cancel it now and start over.
+              {t("run.stalledBody")}
             </p>
           </div>
         </div>
@@ -619,7 +621,7 @@ export function RunProgressPage() {
           </div>
           <div>
             <p className="font-semibold text-red-700 dark:text-red-300">
-              Run failed
+              {t("run.failed")}
             </p>
             <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
           </div>
@@ -646,7 +648,7 @@ export function RunProgressPage() {
                     className="animate-float-soft motion-reduce:animate-none"
                   />
                 }
-                label="Documents"
+                label={t("run.stat.documents")}
                 value={
                   docCount > 0
                     ? `${docCount} files · ${formatNumber(totalChars)} characters`
@@ -661,7 +663,7 @@ export function RunProgressPage() {
                     className="animate-float-soft motion-reduce:animate-none [animation-delay:1.2s]"
                   />
                 }
-                label="Exam"
+                label={t("run.stat.exam")}
                 value={
                   totalQuestions > 0
                     ? `${totalQuestions} questions · 4 types`
@@ -676,7 +678,7 @@ export function RunProgressPage() {
                     className="animate-float-soft motion-reduce:animate-none [animation-delay:2.4s]"
                   />
                 }
-                label="Configurations"
+                label={t("run.stat.configurations")}
                 value={configCount > 0 ? `${configCount} configurations` : "—"}
               />
             </div>

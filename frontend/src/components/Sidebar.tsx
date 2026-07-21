@@ -108,14 +108,34 @@ export function Sidebar() {
             Probe
           </span>
         </div>
-        <button
-          type="button"
-          onClick={() => setOpen(false)}
-          aria-label={t("sidebar.hide")}
-          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-800 dark:hover:bg-slate-800 dark:hover:text-slate-200"
-        >
-          <PanelLeftClose size={16} />
-        </button>
+        <div className="flex items-center gap-1">
+          <a
+            href="https://github.com/estebandev213/RAGProbe"
+            target="_blank"
+            rel="noreferrer"
+            aria-label={t("nav.github")}
+            title={t("nav.github")}
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-800 dark:hover:bg-slate-800 dark:hover:text-slate-200"
+          >
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="currentColor"
+              aria-hidden="true"
+            >
+              <path d="M12 .5C5.73.5.75 5.48.75 11.75c0 5.02 3.26 9.27 7.77 10.77.57.1.78-.25.78-.55 0-.27-.01-1.16-.02-2.11-3.16.69-3.83-1.34-3.83-1.34-.52-1.31-1.26-1.66-1.26-1.66-1.03-.7.08-.69.08-.69 1.14.08 1.74 1.17 1.74 1.17 1.01 1.73 2.65 1.23 3.3.94.1-.73.4-1.23.72-1.51-2.52-.29-5.17-1.26-5.17-5.6 0-1.24.44-2.25 1.17-3.04-.12-.29-.51-1.45.11-3.02 0 0 .96-.31 3.14 1.16a10.9 10.9 0 0 1 5.72 0c2.18-1.47 3.14-1.16 3.14-1.16.62 1.57.23 2.73.11 3.02.73.79 1.17 1.8 1.17 3.04 0 4.35-2.65 5.31-5.18 5.59.41.35.77 1.05.77 2.11 0 1.53-.01 2.75-.01 3.13 0 .3.2.66.79.55A11.26 11.26 0 0 0 23.25 11.75C23.25 5.48 18.27.5 12 .5Z" />
+            </svg>
+          </a>
+          <button
+            type="button"
+            onClick={() => setOpen(false)}
+            aria-label={t("sidebar.hide")}
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-800 dark:hover:bg-slate-800 dark:hover:text-slate-200"
+          >
+            <PanelLeftClose size={16} />
+          </button>
+        </div>
       </div>
 
       <nav className="mt-8 flex flex-col gap-1">
